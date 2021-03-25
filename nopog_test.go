@@ -9,11 +9,13 @@ import (
 
 var testObject string = `{"ob":"test ✔⚓🛸🛴"}`
 var testKey string = "test/"
+var testServerIP string = "10.0.1.249"
+var testServerDatabase string = "nopog"
 
 func TestKeys(t *testing.T) {
 	storage := &Storage{
-		Name: "nopog",
-		IP:   "10.0.1.249",
+		Name: testServerDatabase,
+		IP:   testServerIP,
 	}
 	storage.Start()
 	defer storage.Close()
@@ -32,8 +34,8 @@ func TestKeys(t *testing.T) {
 
 func TestSetAndGet(t *testing.T) {
 	storage := &Storage{
-		Name: "nopog",
-		IP:   "10.0.1.249",
+		Name: testServerDatabase,
+		IP:   testServerIP,
 	}
 	storage.Start()
 	defer storage.Close()
@@ -54,8 +56,8 @@ func TestSetAndGet(t *testing.T) {
 
 func TestGetPath(t *testing.T) {
 	storage := &Storage{
-		Name: "nopog",
-		IP:   "10.0.1.249",
+		Name: testServerDatabase,
+		IP:   testServerIP,
 	}
 	storage.Start()
 	defer storage.Close()
@@ -75,8 +77,8 @@ func TestGetPath(t *testing.T) {
 
 func TestGetN(t *testing.T) {
 	storage := &Storage{
-		Name: "nopog",
-		IP:   "10.0.1.249",
+		Name: testServerDatabase,
+		IP:   testServerIP,
 	}
 	storage.Start()
 	defer storage.Close()
@@ -96,8 +98,8 @@ func TestGetN(t *testing.T) {
 
 func TestRange(t *testing.T) {
 	storage := &Storage{
-		Name: "nopog",
-		IP:   "10.0.1.249",
+		Name: testServerDatabase,
+		IP:   testServerIP,
 	}
 	storage.Start()
 	defer storage.Close()

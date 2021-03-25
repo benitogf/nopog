@@ -95,7 +95,7 @@ func (db *Storage) Close() {
 
 // Clear all keys in the storage
 func (db *Storage) Clear() {
-	_, err := db.Client.Query(deleteQuery("*") + ";")
+	_, err := db.Client.Exec(deleteQuery("*") + ";")
 	if err != nil {
 		log.Println("failed clear on sql", err)
 	}
@@ -261,7 +261,7 @@ func (db *Storage) GetNRange(path string, from, to int64, limit int) ([]Object, 
 
 // Set a value
 func (db *Storage) Set(key string, value string) (string, error) {
-	_, err := db.Client.Query(setQuery(key, value) + ";")
+	_, err := db.Client.Exec(setQuery(key, value) + ";")
 	if err != nil {
 		return "", err
 	}
@@ -271,7 +271,7 @@ func (db *Storage) Set(key string, value string) (string, error) {
 
 // Del a key/pattern value(s)
 func (db *Storage) Del(path string) error {
-	_, err := db.Client.Query(deleteQuery(path) + ";")
+	_, err := db.Client.Exec(deleteQuery(path) + ";")
 	if err != nil {
 		log.Println("failed del on sql", path, err)
 		return err
