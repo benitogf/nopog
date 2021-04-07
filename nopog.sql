@@ -5,7 +5,7 @@
 -- Dumped from database version 10.16 (Ubuntu 10.16-0ubuntu0.18.04.1)
 -- Dumped by pg_dump version 13.2
 
--- Started on 2021-03-24 15:07:01
+-- Started on 2021-04-01 16:06:03
 
 SET statement_timeout = 0;
 SET lock_timeout = 0;
@@ -19,7 +19,7 @@ SET client_min_messages = warning;
 SET row_security = off;
 
 --
--- TOC entry 598 (class 1247 OID 16448)
+-- TOC entry 512 (class 1247 OID 16542)
 -- Name: entry; Type: TYPE; Schema: public; Owner: -
 --
 
@@ -32,7 +32,7 @@ CREATE TYPE public.entry AS (
 
 
 --
--- TOC entry 213 (class 1255 OID 16433)
+-- TOC entry 215 (class 1255 OID 16543)
 -- Name: del(character varying); Type: FUNCTION; Schema: public; Owner: -
 --
 
@@ -43,25 +43,33 @@ DECLARE
         poswildcard integer := POSITION('*' IN fkey);
         /* this is how you count characters in pgsql */
         /* https://stackoverflow.com/a/36376584 */
-        countwildcards integer := array_length(string_to_array(fkey, '*'), 1) - 1;
         countseparators integer := array_length(string_to_array(fkey, '/'), 1) - 1;
         nowildcard bool := poswildcard = 0;
-        wildcardquery text := replace(fkey, '*', '%');
 BEGIN
+                if NOT public.valid(fkey) then
+                        raise notice 'invalid key';
+                        return;
+                end if;
+
         if nowildcard then
-        DELETE FROM public.keys WHERE public.keys.key = fkey;
-                return;
+                DELETE FROM public.keys WHERE public.keys.key = fkey;
+            return;
         end if;
-        if countwildcards > 1 then
-                return;
-        end if;
-        DELETE FROM public.keys where public.keys.key like wildcardquery;
+
+                if fkey = '*' then
+                        DELETE FROM public.keys;
+                        return;
+                end if;
+
+        DELETE FROM public.keys
+                        where public.keys.key ~ fkey
+                                AND array_length(string_to_array(public.keys.key, '/'), 1) - 1 = countSeparators;
 END;
 $$;
 
 
 --
--- TOC entry 214 (class 1255 OID 16449)
+-- TOC entry 214 (class 1255 OID 16544)
 -- Name: get(character varying); Type: FUNCTION; Schema: public; Owner: -
 --
 
@@ -71,34 +79,42 @@ CREATE FUNCTION public.get(fkey character varying) RETURNS SETOF public.entry
 /* to return a join we declared a type 'entry' */
 /* https://dba.stackexchange.com/a/96140 */
 DECLARE
-        poswildcard integer := POSITION('*' IN fkey);
+        wildcardPosition integer := position('*' IN fkey);
         /* this is how you count characters in pgsql */
         /* https://stackoverflow.com/a/36376584 */
-        countwildcards integer := array_length(string_to_array(fkey, '*'), 1) - 1;
-        countseparators integer := array_length(string_to_array(fkey, '/'), 1) - 1;
-        nowildcard bool := poswildcard = 0;
-        wildcardquery text := replace(fkey, '*', '%');
+        countSeparators integer := array_length(string_to_array(fkey, '/'), 1) - 1;
+        noWildcard bool := wildcardPosition = 0;
 BEGIN
-        if nowildcard then
-                raise notice 'here';
+                if NOT (select public.valid(fkey)) then
+                                raise notice 'invalid key';
+                                return;
+                end if;
+
+        if fkey = '*' then
+                raise notice 'get all';
+                return QUERY SELECT public.keys.key, public.keys.created, public.keys.updated, values.data FROM public.keys
+                        INNER JOIN public.values
+                        ON public.values.key = public.keys.key
+                                                ORDER BY public.keys.created DESC;
+                return;
+        end if;
+
+        if noWildcard then
+                raise notice 'no wildcard';
                 /* so... return doens't return, you need to double return so it returns */
+                return QUERY SELECT public.keys.key, public.keys.created, public.keys.updated, values.data FROM public.keys
+                        INNER JOIN public.values
+                        ON public.values.key = public.keys.key
+                        WHERE public.keys.key = fkey;
+                return;
+        end if;
+
+        raise notice 'glob pattern';
         return QUERY SELECT public.keys.key, public.keys.created, public.keys.updated, values.data FROM public.keys
                         INNER JOIN public.values
                         ON public.values.key = public.keys.key
-                        WHERE public.keys.key = fkey
-                        ORDER BY public.keys.created DESC;
-                return;
-        end if;
-        if countwildcards > 1 then
-                raise notice 'no here';
-                return;
-        end if;
-        raise notice 'less here';
-        return QUERY SELECT public.keys.key, public.keys.created, public.keys.updated, values.data FROM public.keys
-                        INNER JOIN public.values
-                        ON public.values.key = public.keys.key
-                        WHERE public.keys.key like wildcardquery
-                        ORDER BY public.keys.created DESC;
+                        WHERE public.keys.key ~ fkey AND array_length(string_to_array(public.keys.key, '/'), 1) - 1 = countSeparators
+                                                ORDER BY public.keys.created DESC;
 END;
 $$;
 
@@ -106,7 +122,7 @@ $$;
 SET default_tablespace = '';
 
 --
--- TOC entry 196 (class 1259 OID 16391)
+-- TOC entry 197 (class 1259 OID 16545)
 -- Name: keys; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -118,7 +134,7 @@ CREATE TABLE public.keys (
 
 
 --
--- TOC entry 212 (class 1255 OID 16442)
+-- TOC entry 211 (class 1255 OID 16551)
 -- Name: peek(character varying); Type: FUNCTION; Schema: public; Owner: -
 --
 
@@ -137,9 +153,7 @@ BEGIN
         if nowildcard then
                 raise notice 'here';
                 /* so... return doens't return, you need to double return so it returns */
-        return QUERY SELECT * FROM public.keys
-                        WHERE public.keys.key = fkey
-                        ORDER BY public.keys.created DESC;
+        return QUERY SELECT * FROM public.keys WHERE public.keys.key = fkey;
                 return;
         end if;
         if countwildcards > 1 then
@@ -147,15 +161,13 @@ BEGIN
                 return;
         end if;
         raise notice 'less here';
-        return QUERY SELECT * FROM public.keys
-                WHERE public.keys.key like wildcardquery
-                ORDER BY public.keys.created DESC;
+        return QUERY SELECT * FROM public.keys where public.keys.key like wildcardquery;
 END;
 $$;
 
 
 --
--- TOC entry 211 (class 1255 OID 16423)
+-- TOC entry 212 (class 1255 OID 16552)
 -- Name: set(character varying, character varying); Type: FUNCTION; Schema: public; Owner: -
 --
 
@@ -165,7 +177,13 @@ CREATE FUNCTION public.set(fkey character varying, fvalue character varying) RET
 DECLARE
         curtime timestamp := now();
         jvalue json := fvalue::json;
+                wildcardPosition integer := position('*' IN fkey);
 BEGIN
+        if NOT (select public.valid(fkey)) OR wildcardPosition > 0 then
+                raise notice 'invalid key';
+                return;
+        end if;
+
     INSERT INTO public.keys (key, created, updated) VALUES (fkey, curtime, NULL)
                 ON CONFLICT (key) DO
                 UPDATE SET updated = curtime;
@@ -177,7 +195,25 @@ $$;
 
 
 --
--- TOC entry 197 (class 1259 OID 16399)
+-- TOC entry 213 (class 1255 OID 16553)
+-- Name: valid(character varying); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.valid(fkey character varying) RETURNS boolean
+    LANGUAGE plpgsql
+    AS $_$
+DECLARE
+        countDupeSeparators integer := array_length(string_to_array(fkey, '//'), 1) - 1;
+        countDupewildcards integer := array_length(string_to_array(fkey, '**'), 1) - 1;
+        validKeyCharacters bool := fkey ~ '^[a-zA-Z\*\d]$|^[a-zA-Z\*\d][a-zA-Z\*\d\/]+[a-zA-Z\*\d]$';
+BEGIN
+        return validKeyCharacters AND countDupeSeparators = 0 AND countDupewildcards = 0;
+END;
+$_$;
+
+
+--
+-- TOC entry 198 (class 1259 OID 16554)
 -- Name: values; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -188,7 +224,7 @@ CREATE TABLE public."values" (
 
 
 --
--- TOC entry 2797 (class 2606 OID 16406)
+-- TOC entry 2798 (class 2606 OID 16561)
 -- Name: keys keys_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -197,7 +233,7 @@ ALTER TABLE ONLY public.keys
 
 
 --
--- TOC entry 2799 (class 2606 OID 16425)
+-- TOC entry 2800 (class 2606 OID 16563)
 -- Name: keys keys_ukey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -206,7 +242,7 @@ ALTER TABLE ONLY public.keys
 
 
 --
--- TOC entry 2802 (class 2606 OID 16427)
+-- TOC entry 2803 (class 2606 OID 16565)
 -- Name: values keys_vukey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -215,7 +251,7 @@ ALTER TABLE ONLY public."values"
 
 
 --
--- TOC entry 2800 (class 1259 OID 16412)
+-- TOC entry 2801 (class 1259 OID 16566)
 -- Name: fki_keys; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -223,7 +259,7 @@ CREATE INDEX fki_keys ON public."values" USING btree (key);
 
 
 --
--- TOC entry 2803 (class 2606 OID 16428)
+-- TOC entry 2804 (class 2606 OID 16567)
 -- Name: values keys_vfkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -231,7 +267,7 @@ ALTER TABLE ONLY public."values"
     ADD CONSTRAINT keys_vfkey FOREIGN KEY (key) REFERENCES public.keys(key) ON UPDATE CASCADE ON DELETE CASCADE NOT VALID;
 
 
--- Completed on 2021-03-24 15:07:01
+-- Completed on 2021-04-01 16:06:03
 
 --
 -- PostgreSQL database dump complete

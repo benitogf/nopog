@@ -23,13 +23,19 @@ func TestKeys(t *testing.T) {
 	keys, err := storage.Keys()
 	require.NoError(t, err)
 	require.Equal(t, []string{}, keys)
-	_, err = storage.Set(testKey, testObject)
+	_, err = storage.Set(testKey+"1", testObject)
 	require.NoError(t, err)
-	_, err = storage.Set(testKey, `not json`)
+	_, err = storage.Set("notValidKey//", testObject)
+	require.Error(t, err)
+	_, err = storage.Set("notValidKey/**", testObject)
+	require.Error(t, err)
+	_, err = storage.Set("notValidKey/*/", testObject)
+	require.Error(t, err)
+	_, err = storage.Set(testKey+"1", `not json`)
 	require.Error(t, err)
 	keys, err = storage.Keys()
 	require.NoError(t, err)
-	require.Equal(t, []string{testKey}, keys)
+	require.Equal(t, []string{testKey + "1"}, keys)
 }
 
 func TestSetAndGet(t *testing.T) {
@@ -106,6 +112,7 @@ func TestRange(t *testing.T) {
 	storage.Clear()
 	_, err := storage.Set(testKey+"1", testObject)
 	require.NoError(t, err)
+	time.Sleep(time.Second * 1)
 	now := time.Now().UTC().UnixNano()
 	// this sleep depends on the clock difference between the database server and your pc
 	// should be 0 using ntp

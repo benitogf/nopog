@@ -262,6 +262,7 @@ func (db *Storage) GetNRange(path string, from, to int64, limit int) ([]Object, 
 // Set a value
 func (db *Storage) Set(key string, value string) (string, error) {
 	_, err := db.Client.Exec(setQuery(key, value) + ";")
+	// log.Println("res set", key, res)
 	if err != nil {
 		return "", err
 	}
