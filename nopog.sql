@@ -5,7 +5,7 @@
 -- Dumped from database version 10.16 (Ubuntu 10.16-0ubuntu0.18.04.1)
 -- Dumped by pg_dump version 13.2
 
--- Started on 2021-04-01 16:06:03
+-- Started on 2021-04-07 18:02:01
 
 SET statement_timeout = 0;
 SET lock_timeout = 0;
@@ -19,7 +19,7 @@ SET client_min_messages = warning;
 SET row_security = off;
 
 --
--- TOC entry 512 (class 1247 OID 16542)
+-- TOC entry 513 (class 1247 OID 16542)
 -- Name: entry; Type: TYPE; Schema: public; Owner: -
 --
 
@@ -32,7 +32,42 @@ CREATE TYPE public.entry AS (
 
 
 --
--- TOC entry 215 (class 1255 OID 16543)
+-- TOC entry 216 (class 1255 OID 16587)
+-- Name: broadcast(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.broadcast() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $_$
+DECLARE
+        rec RECORD;
+        payload TEXT;
+BEGIN
+        CASE TG_OP
+        WHEN 'INSERT', 'UPDATE' THEN
+         rec := NEW;
+        WHEN 'DELETE' THEN
+         rec := OLD;
+        ELSE
+         RAISE EXCEPTION 'Unknown TG_OP: "%". Should not occur!', TG_OP;
+         RETURN NULL;
+        END CASE;
+        -- Get required fields
+        -- EXECUTE format('SELECT $1.%I::TEXT', 'key')
+        -- INTO 'key'
+        -- USING rec;
+        -- payload_items := coalesce(payload_items,'{}')::jsonb || json_build_object(column_name,column_value)::jsonb;
+        -- NOTIFY 'broadcast', '{"key":"' || rec.key || '",op:"' || TG_OP || '"}';
+        -- NOTIFY 'broadcast', 'aaa';
+        payload := '{"key":"' || rec.key || '",op:"' || TG_OP || '"}';
+        PERFORM pg_notify('broadcast', payload);
+        RETURN NULL;
+END;
+$_$;
+
+
+--
+-- TOC entry 214 (class 1255 OID 16543)
 -- Name: del(character varying); Type: FUNCTION; Schema: public; Owner: -
 --
 
@@ -47,7 +82,7 @@ DECLARE
         nowildcard bool := poswildcard = 0;
 BEGIN
                 if NOT public.valid(fkey) then
-                        raise notice 'invalid key';
+                        raise exception 'invalid key';
                         return;
                 end if;
 
@@ -69,7 +104,7 @@ $$;
 
 
 --
--- TOC entry 214 (class 1255 OID 16544)
+-- TOC entry 212 (class 1255 OID 16544)
 -- Name: get(character varying); Type: FUNCTION; Schema: public; Owner: -
 --
 
@@ -86,7 +121,7 @@ DECLARE
         noWildcard bool := wildcardPosition = 0;
 BEGIN
                 if NOT (select public.valid(fkey)) then
-                                raise notice 'invalid key';
+                                raise exception 'invalid key';
                                 return;
                 end if;
 
@@ -134,7 +169,7 @@ CREATE TABLE public.keys (
 
 
 --
--- TOC entry 211 (class 1255 OID 16551)
+-- TOC entry 213 (class 1255 OID 16551)
 -- Name: peek(character varying); Type: FUNCTION; Schema: public; Owner: -
 --
 
@@ -145,29 +180,35 @@ DECLARE
         poswildcard integer := POSITION('*' IN fkey);
         /* this is how you count characters in pgsql */
         /* https://stackoverflow.com/a/36376584 */
-        countwildcards integer := array_length(string_to_array(fkey, '*'), 1) - 1;
         countseparators integer := array_length(string_to_array(fkey, '/'), 1) - 1;
         nowildcard bool := poswildcard = 0;
-        wildcardquery text := replace(fkey, '*', '%');
 BEGIN
+                if NOT (select public.valid(fkey)) then
+                                raise exception 'invalid key';
+                                return;
+                end if;
+
+        if fkey = '*' then
+                raise notice 'get all';
+                return QUERY SELECT * FROM public.keys
+                                                ORDER BY public.keys.created DESC;
+                return;
+        end if;
+
         if nowildcard then
-                raise notice 'here';
                 /* so... return doens't return, you need to double return so it returns */
         return QUERY SELECT * FROM public.keys WHERE public.keys.key = fkey;
                 return;
         end if;
-        if countwildcards > 1 then
-                raise notice 'no here';
-                return;
-        end if;
-        raise notice 'less here';
-        return QUERY SELECT * FROM public.keys where public.keys.key like wildcardquery;
+
+        return QUERY SELECT * FROM public.keys WHERE public.keys.key ~ fkey AND array_length(string_to_array(public.keys.key, '/'), 1) - 1 = countSeparators
+                                                ORDER BY public.keys.created DESC;
 END;
 $$;
 
 
 --
--- TOC entry 212 (class 1255 OID 16552)
+-- TOC entry 215 (class 1255 OID 16552)
 -- Name: set(character varying, character varying); Type: FUNCTION; Schema: public; Owner: -
 --
 
@@ -180,7 +221,7 @@ DECLARE
                 wildcardPosition integer := position('*' IN fkey);
 BEGIN
         if NOT (select public.valid(fkey)) OR wildcardPosition > 0 then
-                raise notice 'invalid key';
+                raise exception 'invalid key';
                 return;
         end if;
 
@@ -195,7 +236,7 @@ $$;
 
 
 --
--- TOC entry 213 (class 1255 OID 16553)
+-- TOC entry 211 (class 1255 OID 16553)
 -- Name: valid(character varying); Type: FUNCTION; Schema: public; Owner: -
 --
 
@@ -224,7 +265,7 @@ CREATE TABLE public."values" (
 
 
 --
--- TOC entry 2798 (class 2606 OID 16561)
+-- TOC entry 2799 (class 2606 OID 16561)
 -- Name: keys keys_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -233,7 +274,7 @@ ALTER TABLE ONLY public.keys
 
 
 --
--- TOC entry 2800 (class 2606 OID 16563)
+-- TOC entry 2801 (class 2606 OID 16563)
 -- Name: keys keys_ukey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -242,7 +283,7 @@ ALTER TABLE ONLY public.keys
 
 
 --
--- TOC entry 2803 (class 2606 OID 16565)
+-- TOC entry 2804 (class 2606 OID 16565)
 -- Name: values keys_vukey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -251,7 +292,7 @@ ALTER TABLE ONLY public."values"
 
 
 --
--- TOC entry 2801 (class 1259 OID 16566)
+-- TOC entry 2802 (class 1259 OID 16566)
 -- Name: fki_keys; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -259,7 +300,15 @@ CREATE INDEX fki_keys ON public."values" USING btree (key);
 
 
 --
--- TOC entry 2804 (class 2606 OID 16567)
+-- TOC entry 2806 (class 2620 OID 16589)
+-- Name: keys broadcast_change; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER broadcast_change AFTER INSERT OR DELETE OR UPDATE OF key, updated ON public.keys FOR EACH ROW EXECUTE PROCEDURE public.broadcast();
+
+
+--
+-- TOC entry 2805 (class 2606 OID 16567)
 -- Name: values keys_vfkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -267,7 +316,7 @@ ALTER TABLE ONLY public."values"
     ADD CONSTRAINT keys_vfkey FOREIGN KEY (key) REFERENCES public.keys(key) ON UPDATE CASCADE ON DELETE CASCADE NOT VALID;
 
 
--- Completed on 2021-04-01 16:06:03
+-- Completed on 2021-04-07 18:02:01
 
 --
 -- PostgreSQL database dump complete
