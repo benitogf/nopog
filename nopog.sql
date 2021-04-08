@@ -5,7 +5,7 @@
 -- Dumped from database version 10.16 (Ubuntu 10.16-0ubuntu0.18.04.1)
 -- Dumped by pg_dump version 13.2
 
--- Started on 2021-04-07 18:02:01
+-- Started on 2021-04-08 17:39:40
 
 SET statement_timeout = 0;
 SET lock_timeout = 0;
@@ -32,13 +32,13 @@ CREATE TYPE public.entry AS (
 
 
 --
--- TOC entry 216 (class 1255 OID 16587)
+-- TOC entry 215 (class 1255 OID 16587)
 -- Name: broadcast(); Type: FUNCTION; Schema: public; Owner: -
 --
 
 CREATE FUNCTION public.broadcast() RETURNS trigger
     LANGUAGE plpgsql
-    AS $_$
+    AS $$
 DECLARE
         rec RECORD;
         payload TEXT;
@@ -52,18 +52,12 @@ BEGIN
          RAISE EXCEPTION 'Unknown TG_OP: "%". Should not occur!', TG_OP;
          RETURN NULL;
         END CASE;
-        -- Get required fields
-        -- EXECUTE format('SELECT $1.%I::TEXT', 'key')
-        -- INTO 'key'
-        -- USING rec;
-        -- payload_items := coalesce(payload_items,'{}')::jsonb || json_build_object(column_name,column_value)::jsonb;
-        -- NOTIFY 'broadcast', '{"key":"' || rec.key || '",op:"' || TG_OP || '"}';
-        -- NOTIFY 'broadcast', 'aaa';
-        payload := '{"key":"' || rec.key || '",op:"' || TG_OP || '"}';
+        -- https://gist.github.com/colophonemes/9701b906c5be572a40a84b08f4d2fa4e
+        payload := '{"key":"' || rec.key || '","op":"' || TG_OP || '"}';
         PERFORM pg_notify('broadcast', payload);
         RETURN NULL;
 END;
-$_$;
+$$;
 
 
 --
@@ -208,29 +202,31 @@ $$;
 
 
 --
--- TOC entry 215 (class 1255 OID 16552)
+-- TOC entry 216 (class 1255 OID 16593)
 -- Name: set(character varying, character varying); Type: FUNCTION; Schema: public; Owner: -
 --
 
-CREATE FUNCTION public.set(fkey character varying, fvalue character varying) RETURNS void
+CREATE FUNCTION public.set(fkey character varying, fvalue character varying) RETURNS timestamp without time zone
     LANGUAGE plpgsql
     AS $$
 DECLARE
         curtime timestamp := now();
         jvalue json := fvalue::json;
-                wildcardPosition integer := position('*' IN fkey);
+        wildcardPosition integer := position('*' IN fkey);
 BEGIN
         if NOT (select public.valid(fkey)) OR wildcardPosition > 0 then
-                raise exception 'invalid key';
-                return;
+                        raise exception 'invalid key';
+                        return curtime;
         end if;
 
-    INSERT INTO public.keys (key, created, updated) VALUES (fkey, curtime, NULL)
-                ON CONFLICT (key) DO
-                UPDATE SET updated = curtime;
-    INSERT INTO public.values (key, data) VALUES (fkey, jvalue)
-                ON CONFLICT (key) DO
-                UPDATE SET data = jvalue;
+        -- https://stackoverflow.com/a/14550315
+        INSERT INTO public.keys (key, created, updated) VALUES (fkey, curtime, NULL)
+                                ON CONFLICT (key) DO
+                                UPDATE SET updated = curtime;
+        INSERT INTO public.values (key, data) VALUES (fkey, jvalue)
+                                ON CONFLICT (key) DO
+                                UPDATE SET data = jvalue;
+        return curtime;
 END;
 $$;
 
@@ -300,7 +296,7 @@ CREATE INDEX fki_keys ON public."values" USING btree (key);
 
 
 --
--- TOC entry 2806 (class 2620 OID 16589)
+-- TOC entry 2806 (class 2620 OID 16595)
 -- Name: keys broadcast_change; Type: TRIGGER; Schema: public; Owner: -
 --
 
@@ -316,7 +312,7 @@ ALTER TABLE ONLY public."values"
     ADD CONSTRAINT keys_vfkey FOREIGN KEY (key) REFERENCES public.keys(key) ON UPDATE CASCADE ON DELETE CASCADE NOT VALID;
 
 
--- Completed on 2021-04-07 18:02:01
+-- Completed on 2021-04-08 17:39:40
 
 --
 -- PostgreSQL database dump complete

@@ -2,7 +2,6 @@ package nopog
 
 import (
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -11,10 +10,12 @@ var testObject string = `{"ob":"test ✔⚓🛸🛴"}`
 var testKey string = "test/"
 var testServerIP string = "10.0.1.249"
 var testServerDatabase string = "nopog"
+var testServerUser = "idx"
 
 func TestKeys(t *testing.T) {
 	storage := &Storage{
 		Name: testServerDatabase,
+		User: testServerUser,
 		IP:   testServerIP,
 	}
 	storage.Start()
@@ -41,6 +42,7 @@ func TestKeys(t *testing.T) {
 func TestSetAndGet(t *testing.T) {
 	storage := &Storage{
 		Name: testServerDatabase,
+		User: testServerUser,
 		IP:   testServerIP,
 	}
 	storage.Start()
@@ -63,6 +65,7 @@ func TestSetAndGet(t *testing.T) {
 func TestGetPath(t *testing.T) {
 	storage := &Storage{
 		Name: testServerDatabase,
+		User: testServerUser,
 		IP:   testServerIP,
 	}
 	storage.Start()
@@ -84,6 +87,7 @@ func TestGetPath(t *testing.T) {
 func TestGetN(t *testing.T) {
 	storage := &Storage{
 		Name: testServerDatabase,
+		User: testServerUser,
 		IP:   testServerIP,
 	}
 	storage.Start()
@@ -105,6 +109,7 @@ func TestGetN(t *testing.T) {
 func TestRange(t *testing.T) {
 	storage := &Storage{
 		Name: testServerDatabase,
+		User: testServerUser,
 		IP:   testServerIP,
 	}
 	storage.Start()
@@ -112,21 +117,16 @@ func TestRange(t *testing.T) {
 	storage.Clear()
 	_, err := storage.Set(testKey+"1", testObject)
 	require.NoError(t, err)
-	time.Sleep(time.Second * 1)
-	now := time.Now().UTC().UnixNano()
-	// this sleep depends on the clock difference between the database server and your pc
-	// should be 0 using ntp
-	time.Sleep(time.Second * 1)
-	_, err = storage.Set(testKey+"2", testObject)
+	secondOpTime, err := storage.Set(testKey+"2", testObject)
 	require.NoError(t, err)
-	dataList, err := storage.GetNRange(testKey+"*", now, 0, 2)
+	dataList, err := storage.GetNRange(testKey+"*", secondOpTime, secondOpTime, 2)
 	require.NoError(t, err)
 	require.Equal(t, 1, len(dataList))
 	data := dataList[0]
 	require.NoError(t, err)
 	require.Equal(t, testKey+"2", data.Key)
 	require.Equal(t, testObject, string(data.Value))
-	keys, err := storage.KeysRange(testKey+"*", now, 0, 2)
+	keys, err := storage.KeysRange(testKey+"*", secondOpTime, secondOpTime, 2)
 	require.NoError(t, err)
 	require.Equal(t, []string{testKey + "2"}, keys)
 }

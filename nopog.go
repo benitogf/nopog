@@ -5,10 +5,11 @@ import (
 	"encoding/json"
 	"log"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
-	_ "github.com/lib/pq"
+	"github.com/lib/pq"
 )
 
 // Object : data structure of elements
@@ -34,16 +35,32 @@ type Entry struct {
 
 // Storage composition of Database interface
 type Storage struct {
-	Name   string
-	IP     string
-	Client *sql.DB
-	mutex  sync.RWMutex
-	Active bool
+	Name     string
+	User     string
+	IP       string
+	Client   *sql.DB
+	mutex    sync.RWMutex
+	listener *pq.Listener
+	Active   bool
 }
+
+type BroadcastEvent struct {
+	Key string
+	OP  string
+}
+
+const NOTIMEZONE = "2006-01-02 15:04:05.999999999"
 
 func nanoTimestampToRFC3339NoTimezone(ts int64) string {
 	unixTimeUTC := time.Unix(0, ts)
-	return unixTimeUTC.Format("2006-01-02 15:04:05.999999999")
+	return unixTimeUTC.Format(NOTIMEZONE)
+}
+
+// since we are using timestamp with no timezone the scan of nulltime results in UTC timezone
+// this functions replaces the default UTC timezone with the local one
+func removeUTCTimezoneFromTime(dt time.Time) (time.Time, error) {
+	process := strings.Replace(dt.String(), " +0000 +0000", "", 1)
+	return time.ParseInLocation(NOTIMEZONE, process, time.Now().Location())
 }
 
 func getQuery(path string) string {
@@ -73,13 +90,15 @@ func (db *Storage) Start() error {
 	}
 
 	// TODO: receive more details about connection by params
-	var conninfo string = "host=" + db.IP + " user=idx dbname=" + db.Name + " sslmode=disable"
-	// log.Println("connecting to", conninfo)
+	var conninfo string = "host=" + db.IP + " user=" + db.User + " dbname=" + db.Name + " sslmode=disable"
+	log.Println("connecting to ", conninfo)
 	db.Client, err = sql.Open("postgres", conninfo)
 	if err != nil {
 		log.Println("failed to connect to pgsql", err)
 		panic(err)
 	}
+
+	go db.Listen(conninfo)
 
 	db.Active = true
 	return err
@@ -90,6 +109,7 @@ func (db *Storage) Close() {
 	db.mutex.Lock()
 	defer db.mutex.Unlock()
 	db.Active = false
+	db.listener.Close()
 	db.Client.Close()
 }
 
@@ -222,7 +242,7 @@ func (db *Storage) GetN(path string, limit int) ([]Object, error) {
 // GetNRange get last N elements of a pattern related value(s) in a time range. "to = 0" is treated as now
 func (db *Storage) GetNRange(path string, from, to int64, limit int) ([]Object, error) {
 	res := []Object{}
-	now := time.Now().UTC().UnixNano()
+	now := time.Now().UnixNano()
 	if to == 0 {
 		to = now
 	}
@@ -260,14 +280,75 @@ func (db *Storage) GetNRange(path string, from, to int64, limit int) ([]Object, 
 }
 
 // Set a value
-func (db *Storage) Set(key string, value string) (string, error) {
-	_, err := db.Client.Exec(setQuery(key, value) + ";")
-	// log.Println("res set", key, res)
+func (db *Storage) Set(key string, value string) (int64, error) {
+	entryTime := int64(0)
+
+	res, err := db.Client.Query(setQuery(key, value) + ";")
 	if err != nil {
-		return "", err
+		return entryTime, err
+	}
+	defer res.Close()
+
+	var opTime sql.NullTime
+	res.Next()
+	err = res.Scan(&opTime)
+	if err != nil {
+		return entryTime, err
 	}
 
-	return key, nil
+	if !opTime.Valid {
+		return entryTime, err
+	}
+
+	localTime, err := removeUTCTimezoneFromTime(opTime.Time)
+	if err != nil {
+		return entryTime, err
+	}
+
+	entryTime = localTime.UnixNano()
+
+	return entryTime, nil
+}
+
+func logListener(event pq.ListenerEventType, err error) {
+	if err != nil {
+		log.Println("listener error: ", err)
+		panic(err)
+	}
+	if event == pq.ListenerEventConnectionAttemptFailed {
+		log.Println("failed to listen", err)
+		panic(err)
+	}
+}
+
+func (db *Storage) Listen(conn string) {
+	db.listener = pq.NewListener(conn,
+		10*time.Second, time.Minute,
+		logListener)
+
+	err := db.listener.Listen("broadcast")
+	if err != nil {
+		db.listener.Close()
+		panic(err)
+	}
+
+	for {
+		select {
+		case e := <-db.listener.Notify:
+			if e == nil {
+				continue
+			}
+			var event BroadcastEvent
+			err := json.Unmarshal([]byte(e.Extra), &event)
+			if err != nil {
+				log.Println("failed to parse broadcast event", err)
+				continue
+			}
+			log.Println("broadcast", event.Key, event.OP)
+		case <-time.After(time.Minute):
+			go db.listener.Ping()
+		}
+	}
 }
 
 // Del a key/pattern value(s)
