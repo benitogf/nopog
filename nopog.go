@@ -98,7 +98,8 @@ func (db *Storage) Start() error {
 		panic(err)
 	}
 
-	go db.Listen(conninfo)
+	// sample of notify listener
+	// go db.Listen(conninfo)
 
 	db.Active = true
 	return err
@@ -109,7 +110,7 @@ func (db *Storage) Close() {
 	db.mutex.Lock()
 	defer db.mutex.Unlock()
 	db.Active = false
-	db.listener.Close()
+	// db.listener.Close()
 	db.Client.Close()
 }
 
