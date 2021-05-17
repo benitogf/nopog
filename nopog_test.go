@@ -16,7 +16,7 @@ func TestKeys(t *testing.T) {
 	storage := &Storage{
 		Name: testServerDatabase,
 		User: testServerUser,
-		IP:   testServerIP,
+		Host: testServerIP,
 	}
 	storage.Start()
 	defer storage.Close()
@@ -43,7 +43,7 @@ func TestSetAndGet(t *testing.T) {
 	storage := &Storage{
 		Name: testServerDatabase,
 		User: testServerUser,
-		IP:   testServerIP,
+		Host: testServerIP,
 	}
 	storage.Start()
 	defer storage.Close()
@@ -66,7 +66,7 @@ func TestGetPath(t *testing.T) {
 	storage := &Storage{
 		Name: testServerDatabase,
 		User: testServerUser,
-		IP:   testServerIP,
+		Host: testServerIP,
 	}
 	storage.Start()
 	defer storage.Close()
@@ -88,7 +88,7 @@ func TestGetN(t *testing.T) {
 	storage := &Storage{
 		Name: testServerDatabase,
 		User: testServerUser,
-		IP:   testServerIP,
+		Host: testServerIP,
 	}
 	storage.Start()
 	defer storage.Close()
@@ -110,7 +110,7 @@ func TestRange(t *testing.T) {
 	storage := &Storage{
 		Name: testServerDatabase,
 		User: testServerUser,
-		IP:   testServerIP,
+		Host: testServerIP,
 	}
 	storage.Start()
 	defer storage.Close()

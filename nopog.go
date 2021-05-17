@@ -37,7 +37,10 @@ type Entry struct {
 type Storage struct {
 	Name     string
 	User     string
-	IP       string
+	Password string
+	SSLMode  string
+	Host     string
+	Port     string
 	Client   *sql.DB
 	mutex    sync.RWMutex
 	listener *pq.Listener
@@ -85,13 +88,24 @@ func (db *Storage) Start() error {
 	db.mutex.Lock()
 	defer db.mutex.Unlock()
 
-	if db.Name == "" || db.IP == "" {
+	if db.Name == "" || db.Host == "" {
 		panic("can't connect to PgSQL without IP and database values name defined")
 	}
 
-	// TODO: receive more details about connection by params
-	var conninfo string = "host=" + db.IP + " user=" + db.User + " dbname=" + db.Name + " sslmode=disable"
-	log.Println("connecting to ", conninfo)
+	if db.SSLMode == "" {
+		db.SSLMode = "disable"
+	}
+
+	var conninfo string = "host=" + db.Host + " user=" + db.User + " dbname=" + db.Name + " sslmode=" + db.SSLMode
+	if db.Password != "" {
+		conninfo += " password=" + db.Password
+	}
+
+	if db.Port != "" && db.Port != "5432" {
+		conninfo += " port=" + db.Port
+	}
+
+	log.Println("connecting to ", db.Host)
 	db.Client, err = sql.Open("postgres", conninfo)
 	if err != nil {
 		log.Println("failed to connect to pgsql", err)
