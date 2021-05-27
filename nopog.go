@@ -294,6 +294,45 @@ func (db *Storage) GetNRange(path string, from, to int64, limit int) ([]Object, 
 	return res, nil
 }
 
+// GetNRange get elements of a pattern related value(s) in a time range. "to = 0" is treated as now
+func (db *Storage) GetRange(path string, from, to int64) ([]Object, error) {
+	res := []Object{}
+	now := time.Now().UnixNano()
+	if to == 0 {
+		to = now
+	}
+	timeRange := "WHERE kv.created >= '" + nanoTimestampToRFC3339NoTimezone(from) + "' AND kv.created <= '" + nanoTimestampToRFC3339NoTimezone(to) + "'"
+	qry := getQuery(path) + " AS kv " + timeRange + ";"
+	// log.Println(qry)
+	rows, err := db.Client.Query(qry)
+	if err != nil {
+		log.Println("failed get on sql", err)
+		return res, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var entry Entry
+		err = rows.Scan(&entry.Key, &entry.Created, &entry.Updated, &entry.Data)
+		if err != nil {
+			log.Println("failed to parse sql entry", path, err)
+			continue
+		}
+		updatedTime := int64(0)
+		if entry.Updated.Valid {
+			updatedTime = entry.Updated.Time.UnixNano()
+		}
+
+		res = append(res, Object{
+			Created: entry.Created.UnixNano(),
+			Updated: updatedTime,
+			Key:     entry.Key,
+			Value:   entry.Data,
+		})
+	}
+
+	return res, nil
+}
+
 // Set a value
 func (db *Storage) Set(key string, value string) (int64, error) {
 	entryTime := int64(0)
