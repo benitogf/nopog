@@ -15,12 +15,14 @@ var testKey string = "test/"
 var testServerIP string = "localhost"
 var testServerDatabase string = "nopog"
 var testServerUser = "nopog"
+var testServerPassword = "password"
 
 func TestKeys(t *testing.T) {
 	storage := &Storage{
-		Name: testServerDatabase,
-		User: testServerUser,
-		Host: testServerIP,
+		Name:     testServerDatabase,
+		User:     testServerUser,
+		Host:     testServerIP,
+		Password: testServerPassword,
 	}
 	storage.Start()
 	defer storage.Close()
