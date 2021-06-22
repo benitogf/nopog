@@ -8,16 +8,22 @@ jobs:
         os: [ubuntu-latest]
     runs-on: ${{ matrix.os }}
     services:
+      # Label used to access the service container
       postgres:
-        image: postgis/postgis:10-2.5
+        # Docker Hub image
+        image: postgres
+        # Provide the password for postgres
         env:
-          # must specify password for PG Docker container image, see: https://registry.hub.docker.com/_/postgres?tab=description&page=1&name=10
-          POSTGRES_PASSWORD: password
-          POSTGRES_DB: nopog
+          POSTGRES_PASSWORD: postgres
+        # Set health checks to wait until postgres has started
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
         ports:
+          # Maps tcp port 5432 on service container to the host
           - 5432:5432
-        # needed because the postgres container does not provide a healthcheck
-        options: --health-cmd pg_isready --health-interval 10s --health-timeout 5s --health-retries 5
     steps:
     - name: Install Go
       uses: actions/setup-go@v2
@@ -26,9 +32,9 @@ jobs:
     - name: Checkout code
       uses: actions/checkout@v2
     - name: Import DB seed data
-      run: psql -d postgresql://postgres@localhost/nopog -f nopog.sql
+      run: psql -d postgresql://postgres@localhost/postgres -f nopog.sql
       env:
-        PGPASSWORD: password
+        PGPASSWORD: postgres
     - name: install
       run: |
         go get github.com/lib/pq

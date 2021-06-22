@@ -13,9 +13,9 @@ var testKey string = "test/"
 // var testServerDatabase string = "nopog"
 // var testServerUser = "idx"
 var testServerIP string = "localhost"
-var testServerDatabase string = "nopog"
-var testServerUser = "nopog"
-var testServerPassword = "password"
+var testServerDatabase string = "postgres"
+var testServerUser = "postgres"
+var testServerPassword = "postgres"
 
 func TestKeys(t *testing.T) {
 	storage := &Storage{
