@@ -8,15 +8,22 @@ import (
 
 var testObject string = `{"ob":"test ✔⚓🛸🛴"}`
 var testKey string = "test/"
-var testServerIP string = "10.0.1.92"
-var testServerDatabase string = "nopog"
-var testServerUser = "idx"
+
+// var testServerIP string = "10.0.1.92"
+// var testServerDatabase string = "nopog"
+// var testServerUser = "idx"
+// var testServerPassword = ""
+var testServerIP string = "localhost"
+var testServerDatabase string = "postgres"
+var testServerUser = "postgres"
+var testServerPassword = "postgres"
 
 func TestKeys(t *testing.T) {
 	storage := &Storage{
-		Name: testServerDatabase,
-		User: testServerUser,
-		Host: testServerIP,
+		Name:     testServerDatabase,
+		User:     testServerUser,
+		Host:     testServerIP,
+		Password: testServerPassword,
 	}
 	storage.Start()
 	defer storage.Close()
@@ -41,9 +48,10 @@ func TestKeys(t *testing.T) {
 
 func TestSetAndGet(t *testing.T) {
 	storage := &Storage{
-		Name: testServerDatabase,
-		User: testServerUser,
-		Host: testServerIP,
+		Name:     testServerDatabase,
+		User:     testServerUser,
+		Host:     testServerIP,
+		Password: testServerPassword,
 	}
 	storage.Start()
 	defer storage.Close()
@@ -64,9 +72,10 @@ func TestSetAndGet(t *testing.T) {
 
 func TestGetPath(t *testing.T) {
 	storage := &Storage{
-		Name: testServerDatabase,
-		User: testServerUser,
-		Host: testServerIP,
+		Name:     testServerDatabase,
+		User:     testServerUser,
+		Host:     testServerIP,
+		Password: testServerPassword,
 	}
 	storage.Start()
 	defer storage.Close()
@@ -86,9 +95,10 @@ func TestGetPath(t *testing.T) {
 
 func TestGetN(t *testing.T) {
 	storage := &Storage{
-		Name: testServerDatabase,
-		User: testServerUser,
-		Host: testServerIP,
+		Name:     testServerDatabase,
+		User:     testServerUser,
+		Host:     testServerIP,
+		Password: testServerPassword,
 	}
 	storage.Start()
 	defer storage.Close()
@@ -108,9 +118,10 @@ func TestGetN(t *testing.T) {
 
 func TestRange(t *testing.T) {
 	storage := &Storage{
-		Name: testServerDatabase,
-		User: testServerUser,
-		Host: testServerIP,
+		Name:     testServerDatabase,
+		User:     testServerUser,
+		Host:     testServerIP,
+		Password: testServerPassword,
 	}
 	storage.Start()
 	defer storage.Close()

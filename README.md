@@ -1,5 +1,7 @@
 # nopog
 
+[![Test](https://github.com/benitogf/nopog/actions/workflows/tests.yml/badge.svg?branch=master)](https://github.com/benitogf/nopog/actions/workflows/tests.yml)
+
 key value abstraction using postgres json column type as value
 
 ![Alt text](erd.PNG?raw=true "ERD")
