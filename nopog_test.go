@@ -8,9 +8,13 @@ import (
 
 var testObject string = `{"ob":"test ✔⚓🛸🛴"}`
 var testKey string = "test/"
-var testServerIP string = "10.0.1.92"
+
+// var testServerIP string = "10.0.1.92"
+// var testServerDatabase string = "nopog"
+// var testServerUser = "idx"
+var testServerIP string = "localhost"
 var testServerDatabase string = "nopog"
-var testServerUser = "idx"
+var testServerUser = "nopog"
 
 func TestKeys(t *testing.T) {
 	storage := &Storage{
