@@ -48,3 +48,9 @@ _, err := storage.Set("test/1", `{"ob":"test ✔⚓🛸🛴"}`)
 dataList, err := storage.Get(key)
 log.Println(dataList[0])
 ```
+
+# troubleshoot
+
+using postgresql 10 this error will show: `collation "pg_catalog.C.UTF-8" for encoding "UTF8" does not exist` when running the .sql script
+
+change this line https://github.com/benitogf/nopog/blob/master/nopog.sql#L27 collation to `pg_catalog."und-x-icu"` or any other available on `SELECT * FROM pg_collation;`
