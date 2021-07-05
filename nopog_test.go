@@ -145,10 +145,22 @@ func TestRange(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 1, len(dataList))
 	data = dataList[0]
-	require.NoError(t, err)
 	require.Equal(t, testKey+"2", data.Key)
 	require.Equal(t, testObject, string(data.Value))
 	keys, err = storage.KeysRange(testKey+"*", secondOpTime, secondOpTime, 2)
 	require.NoError(t, err)
 	require.Equal(t, []string{testKey + "2"}, keys)
+
+	dataList, err = storage.GetUpdatedRange(testKey+"*", secondOpTime, secondOpTime)
+	require.NoError(t, err)
+	require.Equal(t, 0, len(dataList))
+
+	thirdOpTime, err := storage.Set(testKey+"1", testObject)
+	require.NoError(t, err)
+	dataList, err = storage.GetUpdatedRange(testKey+"*", secondOpTime, thirdOpTime)
+	require.NoError(t, err)
+	require.Equal(t, 1, len(dataList))
+	data = dataList[0]
+	require.Equal(t, testKey+"1", data.Key)
+
 }
