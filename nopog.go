@@ -66,20 +66,20 @@ func removeUTCTimezoneFromTime(dt time.Time) (time.Time, error) {
 	return time.ParseInLocation(NOTIMEZONE, process, time.Now().Location())
 }
 
-func getQuery(path string) string {
-	return "select * from public.get('" + path + "')"
+func getQuery() string {
+	return "select * from public.get($1)"
 }
 
-func peekQuery(path string) string {
-	return "select * from public.peek('" + path + "')"
+func peekQuery() string {
+	return "select * from public.peek($1)"
 }
 
-func deleteQuery(path string) string {
-	return "select public.del('" + path + "')"
+func deleteQuery() string {
+	return "select public.del($1)"
 }
 
-func setQuery(key, value string) string {
-	return "select public.set('" + key + "', '" + value + "')"
+func setQuery() string {
+	return "select public.set($1, $2)"
 }
 
 // Start the storage client
@@ -130,7 +130,7 @@ func (db *Storage) Close() {
 
 // Clear all keys in the storage
 func (db *Storage) Clear() {
-	_, err := db.Client.Exec(deleteQuery("*") + ";")
+	_, err := db.Client.Exec(deleteQuery()+";", "*")
 	if err != nil {
 		log.Println("failed clear on sql", err)
 	}
@@ -139,7 +139,7 @@ func (db *Storage) Clear() {
 // Keys list all the keys in the storage
 func (db *Storage) Keys() ([]string, error) {
 	keys := []string{}
-	rows, err := db.Client.Query(peekQuery("*") + ";")
+	rows, err := db.Client.Query(peekQuery()+";", "*")
 	if err != nil {
 		log.Println("failed peek keys on sql", err)
 		return keys, err
@@ -166,11 +166,11 @@ func (db *Storage) KeysRange(path string, from, to int64, limit int) ([]string, 
 	if to == 0 {
 		to = now
 	}
-	timeRange := "WHERE kv.created >= '" + nanoTimestampToRFC3339NoTimezone(from) + "' AND kv.created <= '" + nanoTimestampToRFC3339NoTimezone(to) + "'"
-	limitQuery := "limit " + strconv.FormatInt(int64(limit), 10)
-	qry := peekQuery(path) + " AS kv " + timeRange + " " + limitQuery + ";"
+	timeRange := "WHERE kv.created >= $2 AND kv.created <= $3"
+	limitQuery := "limit $4"
+	qry := peekQuery() + " AS kv " + timeRange + " " + limitQuery + ";"
 	// log.Println(qry)
-	rows, err := db.Client.Query(qry)
+	rows, err := db.Client.Query(qry, path, nanoTimestampToRFC3339NoTimezone(from), nanoTimestampToRFC3339NoTimezone(to), strconv.FormatInt(int64(limit), 10))
 	if err != nil {
 		log.Println("failed get on sql", err)
 		return keys, err
@@ -193,7 +193,7 @@ func (db *Storage) KeysRange(path string, from, to int64, limit int) ([]string, 
 // Get a key/pattern related value(s)
 func (db *Storage) Get(path string) ([]Object, error) {
 	res := []Object{}
-	rows, err := db.Client.Query(getQuery(path) + ";")
+	rows, err := db.Client.Query(getQuery()+";", path)
 	if err != nil {
 		log.Println("failed get on sql", path, err)
 		return res, err
@@ -225,7 +225,7 @@ func (db *Storage) Get(path string) ([]Object, error) {
 // GetN get last N elements of a pattern related value(s)
 func (db *Storage) GetN(path string, limit int) ([]Object, error) {
 	res := []Object{}
-	rows, err := db.Client.Query(getQuery(path) + " limit " + strconv.FormatInt(int64(limit), 10) + ";")
+	rows, err := db.Client.Query(getQuery()+" limit $2;", path, strconv.FormatInt(int64(limit), 10))
 	if err != nil {
 		log.Println("failed get on sql", err)
 		return res, err
@@ -261,11 +261,11 @@ func (db *Storage) GetNRange(path string, from, to int64, limit int) ([]Object, 
 	if to == 0 {
 		to = now
 	}
-	timeRange := "WHERE kv.created >= '" + nanoTimestampToRFC3339NoTimezone(from) + "' AND kv.created <= '" + nanoTimestampToRFC3339NoTimezone(to) + "'"
-	limitQuery := "limit " + strconv.FormatInt(int64(limit), 10)
-	qry := getQuery(path) + " AS kv " + timeRange + " " + limitQuery + ";"
+	timeRange := "WHERE kv.created >= $2 AND kv.created <= $3"
+	limitQuery := "limit $4"
+	qry := getQuery() + " AS kv " + timeRange + " " + limitQuery + ";"
 	// log.Println(qry)
-	rows, err := db.Client.Query(qry)
+	rows, err := db.Client.Query(qry, path, nanoTimestampToRFC3339NoTimezone(from), nanoTimestampToRFC3339NoTimezone(to), strconv.FormatInt(int64(limit), 10))
 	if err != nil {
 		log.Println("failed get on sql", err)
 		return res, err
@@ -301,10 +301,10 @@ func (db *Storage) GetRange(path string, from, to int64) ([]Object, error) {
 	if to == 0 {
 		to = now
 	}
-	timeRange := "WHERE kv.created >= '" + nanoTimestampToRFC3339NoTimezone(from) + "' AND kv.created <= '" + nanoTimestampToRFC3339NoTimezone(to) + "'"
-	qry := getQuery(path) + " AS kv " + timeRange + ";"
+	timeRange := "WHERE kv.created >= $2 AND kv.created <= $3"
+	qry := getQuery() + " AS kv " + timeRange + ";"
 	// log.Println(qry)
-	rows, err := db.Client.Query(qry)
+	rows, err := db.Client.Query(qry, path, nanoTimestampToRFC3339NoTimezone(from), nanoTimestampToRFC3339NoTimezone(to))
 	if err != nil {
 		log.Println("failed get on sql", err)
 		return res, err
@@ -340,10 +340,10 @@ func (db *Storage) GetUpdatedRange(path string, from, to int64) ([]Object, error
 	if to == 0 {
 		to = now
 	}
-	timeRange := "WHERE kv.updated >= '" + nanoTimestampToRFC3339NoTimezone(from) + "' AND kv.updated <= '" + nanoTimestampToRFC3339NoTimezone(to) + "'"
-	qry := getQuery(path) + " AS kv " + timeRange + ";"
+	timeRange := "WHERE kv.updated >= $2 AND kv.updated <= $3"
+	qry := getQuery() + " AS kv " + timeRange + ";"
 	// log.Println(qry)
-	rows, err := db.Client.Query(qry)
+	rows, err := db.Client.Query(qry, path, nanoTimestampToRFC3339NoTimezone(from), nanoTimestampToRFC3339NoTimezone(to))
 	if err != nil {
 		log.Println("failed get on sql", err)
 		return res, err
@@ -376,7 +376,7 @@ func (db *Storage) GetUpdatedRange(path string, from, to int64) ([]Object, error
 func (db *Storage) Set(key string, value string) (int64, error) {
 	entryTime := int64(0)
 
-	res, err := db.Client.Query(setQuery(key, value) + ";")
+	res, err := db.Client.Query(setQuery()+";", key, value)
 	if err != nil {
 		return entryTime, err
 	}
@@ -446,7 +446,7 @@ func (db *Storage) Listen(conn string) {
 
 // Del a key/pattern value(s)
 func (db *Storage) Del(path string) error {
-	_, err := db.Client.Exec(deleteQuery(path) + ";")
+	_, err := db.Client.Exec(deleteQuery()+";", path)
 	if err != nil {
 		log.Println("failed del on sql", path, err)
 		return err

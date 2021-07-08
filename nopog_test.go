@@ -9,10 +9,6 @@ import (
 var testObject string = `{"ob":"test ✔⚓🛸🛴"}`
 var testKey string = "test/"
 
-// var testServerIP string = "10.0.1.92"
-// var testServerDatabase string = "nopog"
-// var testServerUser = "idx"
-// var testServerPassword = ""
 var testServerIP string = "localhost"
 var testServerDatabase string = "postgres"
 var testServerUser = "postgres"
