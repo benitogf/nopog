@@ -1,26 +1,27 @@
---
--- nopog PostgreSQL schema
--- Multi-table key-value store with monotonic timestamps (microseconds since epoch)
---
-
-SET statement_timeout = 0;
-
 -- Enable pg_trgm extension for trigram indexes
 CREATE EXTENSION IF NOT EXISTS pg_trgm;
-SET lock_timeout = 0;
-SET client_encoding = 'UTF8';
-SET standard_conforming_strings = on;
-SELECT pg_catalog.set_config('search_path', '', false);
-SET check_function_bodies = false;
 
 -- Create monotonic clock sequence with cache for high performance
 -- CACHE 1000 keeps values in memory, reducing disk I/O and lock contention
 CREATE SEQUENCE IF NOT EXISTS public.monotonic_clock_seq CACHE 1000;
 
+-- Drop existing functions to recreate them
+DROP FUNCTION IF EXISTS public.valid(character varying);
+DROP FUNCTION IF EXISTS public.monotonic_now();
+DROP FUNCTION IF EXISTS public.create_table(character varying);
+DROP FUNCTION IF EXISTS public.drop_table(character varying);
+DROP FUNCTION IF EXISTS public.nopog_del(character varying, character varying);
+DROP FUNCTION IF EXISTS public.nopog_get(character varying, character varying);
+DROP FUNCTION IF EXISTS public.nopog_peek(character varying, character varying);
+DROP FUNCTION IF EXISTS public.nopog_set(character varying, character varying, character varying);
+DROP FUNCTION IF EXISTS public.nopog_set_batch(character varying, character varying[], character varying[]);
+DROP FUNCTION IF EXISTS public.nopog_get_range(character varying, character varying, bigint, bigint, integer);
+DROP FUNCTION IF EXISTS public.nopog_peek_range(character varying, character varying, bigint, bigint, integer);
+
 -- Create monotonic timestamp function using cached sequence
 -- Returns microseconds since epoch, guaranteed to be strictly increasing
 -- Hybrid approach: uses GREATEST of sequence and current time to maintain time correlation
-CREATE FUNCTION public.monotonic_now() RETURNS bigint
+CREATE OR REPLACE FUNCTION public.monotonic_now() RETURNS bigint
     LANGUAGE sql
     AS $$
     SELECT GREATEST(
@@ -31,7 +32,7 @@ $$;
 
 -- Create valid function (only allows single * at end of path)
 -- Using LANGUAGE sql for better performance (no PL/pgSQL overhead)
-CREATE FUNCTION public.valid(fkey character varying) RETURNS boolean
+CREATE OR REPLACE FUNCTION public.valid(fkey character varying) RETURNS boolean
     LANGUAGE sql
     IMMUTABLE
     AS $_$
@@ -47,17 +48,19 @@ CREATE FUNCTION public.valid(fkey character varying) RETURNS boolean
 $_$;
 
 -- Create table pair function (creates keys_<name> and values_<name> tables)
-CREATE FUNCTION public.create_table(tname character varying) RETURNS void
+CREATE OR REPLACE FUNCTION public.create_table(tname character varying) RETURNS void
     LANGUAGE plpgsql
     AS $$
 DECLARE
     keys_table text := 'keys_' || tname;
     values_table text := 'values_' || tname;
 BEGIN
+    -- Validate table name (alphanumeric and underscore only)
     IF tname !~ '^[a-zA-Z][a-zA-Z0-9_]*$' THEN
         RAISE EXCEPTION 'invalid table name: must start with letter and contain only alphanumeric and underscore';
     END IF;
 
+    -- Create keys table
     EXECUTE format('
         CREATE TABLE IF NOT EXISTS public.%I (
             key character varying(800) NOT NULL PRIMARY KEY,
@@ -65,12 +68,14 @@ BEGIN
             updated bigint
         )', keys_table);
 
+    -- Create values table
     EXECUTE format('
         CREATE TABLE IF NOT EXISTS public.%I (
             key character varying(800) NOT NULL PRIMARY KEY,
             data json NOT NULL
         )', values_table);
 
+    -- Create indexes
     EXECUTE format('CREATE INDEX IF NOT EXISTS idx_%I_created ON public.%I (created DESC)', keys_table, keys_table);
     EXECUTE format('CREATE INDEX IF NOT EXISTS idx_%I_key ON public.%I (key)', values_table, values_table);
     
@@ -80,6 +85,7 @@ BEGIN
     -- Create composite index for prefix + time range queries (most used)
     EXECUTE format('CREATE INDEX IF NOT EXISTS idx_%I_key_created ON public.%I (key text_pattern_ops, created DESC)', keys_table, keys_table);
 
+    -- Add foreign key
     EXECUTE format('
         DO $fk$ BEGIN
             ALTER TABLE public.%I ADD CONSTRAINT %I_fkey 
@@ -90,7 +96,7 @@ END;
 $$;
 
 -- Drop table pair function
-CREATE FUNCTION public.drop_table(tname character varying) RETURNS void
+CREATE OR REPLACE FUNCTION public.drop_table(tname character varying) RETURNS void
     LANGUAGE plpgsql
     AS $$
 DECLARE
@@ -103,7 +109,7 @@ END;
 $$;
 
 -- Delete function with table parameter
-CREATE FUNCTION public.nopog_del(tname character varying, fkey character varying) RETURNS void
+CREATE OR REPLACE FUNCTION public.nopog_del(tname character varying, fkey character varying) RETURNS void
     LANGUAGE plpgsql
     AS $$
 DECLARE
@@ -133,7 +139,7 @@ END;
 $$;
 
 -- Get function with table parameter (optimized: filter keys first, then LEFT OUTER JOIN)
-CREATE FUNCTION public.nopog_get(tname character varying, fkey character varying) 
+CREATE OR REPLACE FUNCTION public.nopog_get(tname character varying, fkey character varying) 
     RETURNS TABLE(key character varying(800), created bigint, updated bigint, data json)
     LANGUAGE plpgsql
     AS $$
@@ -174,7 +180,7 @@ END;
 $$;
 
 -- Get with time range function (optimized: filter keys by prefix AND time range first, then LEFT OUTER JOIN)
-CREATE FUNCTION public.nopog_get_range(tname character varying, fkey character varying, time_from bigint, time_to bigint, result_limit integer) 
+CREATE OR REPLACE FUNCTION public.nopog_get_range(tname character varying, fkey character varying, time_from bigint, time_to bigint, result_limit integer) 
     RETURNS TABLE(key character varying(800), created bigint, updated bigint, data json)
     LANGUAGE plpgsql
     AS $$
@@ -190,6 +196,7 @@ BEGIN
         RAISE EXCEPTION 'invalid key';
     END IF;
     
+    -- Handle to=0 as "now"
     IF time_to = 0 THEN
         effective_to := public.monotonic_now();
     ELSE
@@ -226,7 +233,7 @@ END;
 $$;
 
 -- Peek with time range function (keys only, optimized)
-CREATE FUNCTION public.nopog_peek_range(tname character varying, fkey character varying, time_from bigint, time_to bigint, result_limit integer) 
+CREATE OR REPLACE FUNCTION public.nopog_peek_range(tname character varying, fkey character varying, time_from bigint, time_to bigint, result_limit integer) 
     RETURNS TABLE(key character varying(800), created bigint, updated bigint)
     LANGUAGE plpgsql
     AS $$
@@ -274,7 +281,7 @@ END;
 $$;
 
 -- Peek function with table parameter (keys only)
-CREATE FUNCTION public.nopog_peek(tname character varying, fkey character varying) 
+CREATE OR REPLACE FUNCTION public.nopog_peek(tname character varying, fkey character varying) 
     RETURNS TABLE(key character varying(800), created bigint, updated bigint)
     LANGUAGE plpgsql
     AS $$
@@ -307,7 +314,7 @@ END;
 $$;
 
 -- Batch set function for bulk inserts (keys and values as arrays)
-CREATE FUNCTION public.nopog_set_batch(tname character varying, fkeys character varying[], fvalues character varying[]) RETURNS bigint[]
+CREATE OR REPLACE FUNCTION public.nopog_set_batch(tname character varying, fkeys character varying[], fvalues character varying[]) RETURNS bigint[]
     LANGUAGE plpgsql
     AS $$
 DECLARE
@@ -346,7 +353,7 @@ END;
 $$;
 
 -- Set function with table parameter (optimized with upsert)
-CREATE FUNCTION public.nopog_set(tname character varying, fkey character varying, fvalue character varying) RETURNS bigint
+CREATE OR REPLACE FUNCTION public.nopog_set(tname character varying, fkey character varying, fvalue character varying) RETURNS bigint
     LANGUAGE plpgsql
     AS $$
 DECLARE
