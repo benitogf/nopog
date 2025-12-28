@@ -17,6 +17,9 @@ DROP FUNCTION IF EXISTS public.nopog_set(character varying, character varying, c
 DROP FUNCTION IF EXISTS public.nopog_set_batch(character varying, character varying[], character varying[]);
 DROP FUNCTION IF EXISTS public.nopog_get_range(character varying, character varying, bigint, bigint, integer);
 DROP FUNCTION IF EXISTS public.nopog_peek_range(character varying, character varying, bigint, bigint, integer);
+DROP FUNCTION IF EXISTS public.nopog_get_by_json(character varying, character varying, jsonb);
+DROP FUNCTION IF EXISTS public.nopog_get_by_field(character varying, character varying, text, text);
+DROP FUNCTION IF EXISTS public.nopog_get_multiglob(character varying, character varying);
 
 -- Create monotonic timestamp function using cached sequence
 -- Returns microseconds since epoch, guaranteed to be strictly increasing
@@ -68,16 +71,19 @@ BEGIN
             updated bigint
         )', keys_table);
 
-    -- Create values table
+    -- Create values table with JSONB for efficient querying
     EXECUTE format('
         CREATE TABLE IF NOT EXISTS public.%I (
             key character varying(800) NOT NULL PRIMARY KEY,
-            data json NOT NULL
+            data jsonb NOT NULL
         )', values_table);
 
     -- Create indexes
     EXECUTE format('CREATE INDEX IF NOT EXISTS idx_%I_created ON public.%I (created DESC)', keys_table, keys_table);
     EXECUTE format('CREATE INDEX IF NOT EXISTS idx_%I_key ON public.%I (key)', values_table, values_table);
+    
+    -- Create GIN index for JSONB containment queries (@>, ?, ?&, ?|)
+    EXECUTE format('CREATE INDEX IF NOT EXISTS idx_%I_data_gin ON public.%I USING GIN (data)', values_table, values_table);
     
     -- Create SP-GiST index for ^@ prefix matching operator
     EXECUTE format('CREATE INDEX IF NOT EXISTS idx_%I_key_spgist ON public.%I USING spgist (key)', keys_table, keys_table);
@@ -140,7 +146,7 @@ $$;
 
 -- Get function with table parameter (optimized: filter keys first, then LEFT OUTER JOIN)
 CREATE OR REPLACE FUNCTION public.nopog_get(tname character varying, fkey character varying) 
-    RETURNS TABLE(key character varying(800), created bigint, updated bigint, data json)
+    RETURNS TABLE(key character varying(800), created bigint, updated bigint, data jsonb)
     LANGUAGE plpgsql
     AS $$
 DECLARE
@@ -181,7 +187,7 @@ $$;
 
 -- Get with time range function (optimized: filter keys by prefix AND time range first, then LEFT OUTER JOIN)
 CREATE OR REPLACE FUNCTION public.nopog_get_range(tname character varying, fkey character varying, time_from bigint, time_to bigint, result_limit integer) 
-    RETURNS TABLE(key character varying(800), created bigint, updated bigint, data json)
+    RETURNS TABLE(key character varying(800), created bigint, updated bigint, data jsonb)
     LANGUAGE plpgsql
     AS $$
 DECLARE
@@ -382,5 +388,133 @@ BEGIN
     ', values_table) USING fkey, jvalue;
     
     RETURN curtime;
+END;
+$$;
+
+-- Query by JSONB containment (uses GIN index)
+-- Example: SELECT * FROM nopog_get_by_json('mytable', 'prefix/*', '{"status":"active"}')
+CREATE OR REPLACE FUNCTION public.nopog_get_by_json(tname character varying, fkey character varying, json_filter jsonb) 
+    RETURNS TABLE(key character varying(800), created bigint, updated bigint, data jsonb)
+    LANGUAGE plpgsql
+    AS $$
+DECLARE
+    keys_table text := 'keys_' || tname;
+    values_table text := 'values_' || tname;
+    wildcardPosition integer := position('*' IN fkey);
+    noWildcard bool := wildcardPosition = 0;
+    prefix character varying;
+BEGIN
+    IF NOT public.valid(fkey) THEN
+        RAISE EXCEPTION 'invalid key';
+    END IF;
+
+    IF fkey = '*' THEN
+        RETURN QUERY EXECUTE format('
+            SELECT k.key, k.created, k.updated, v.data 
+            FROM public.%I k 
+            INNER JOIN public.%I v ON v.key = k.key
+            WHERE v.data @> $1
+            ORDER BY k.created DESC', keys_table, values_table) USING json_filter;
+        RETURN;
+    END IF;
+
+    IF noWildcard THEN
+        RETURN QUERY EXECUTE format('
+            SELECT k.key, k.created, k.updated, v.data 
+            FROM public.%I k 
+            INNER JOIN public.%I v ON v.key = k.key
+            WHERE k.key = $1 AND v.data @> $2', keys_table, values_table) USING fkey, json_filter;
+        RETURN;
+    END IF;
+
+    prefix := substring(fkey from 1 for wildcardPosition - 1);
+    RETURN QUERY EXECUTE format('
+        SELECT k.key, k.created, k.updated, v.data 
+        FROM public.%I k 
+        INNER JOIN public.%I v ON v.key = k.key
+        WHERE k.key::text ^@ $1::text AND v.data @> $2
+        ORDER BY k.created DESC', keys_table, values_table) USING prefix, json_filter;
+END;
+$$;
+
+-- Query by JSONB field value
+-- Example: SELECT * FROM nopog_get_by_field('mytable', 'prefix/*', 'status', 'active')
+CREATE OR REPLACE FUNCTION public.nopog_get_by_field(tname character varying, fkey character varying, field_name text, field_value text) 
+    RETURNS TABLE(key character varying(800), created bigint, updated bigint, data jsonb)
+    LANGUAGE plpgsql
+    AS $$
+DECLARE
+    keys_table text := 'keys_' || tname;
+    values_table text := 'values_' || tname;
+    wildcardPosition integer := position('*' IN fkey);
+    noWildcard bool := wildcardPosition = 0;
+    prefix character varying;
+BEGIN
+    IF NOT public.valid(fkey) THEN
+        RAISE EXCEPTION 'invalid key';
+    END IF;
+
+    IF fkey = '*' THEN
+        RETURN QUERY EXECUTE format('
+            SELECT k.key, k.created, k.updated, v.data 
+            FROM public.%I k 
+            INNER JOIN public.%I v ON v.key = k.key
+            WHERE v.data->>$1 = $2
+            ORDER BY k.created DESC', keys_table, values_table) USING field_name, field_value;
+        RETURN;
+    END IF;
+
+    IF noWildcard THEN
+        RETURN QUERY EXECUTE format('
+            SELECT k.key, k.created, k.updated, v.data 
+            FROM public.%I k 
+            INNER JOIN public.%I v ON v.key = k.key
+            WHERE k.key = $1 AND v.data->>$2 = $3', keys_table, values_table) USING fkey, field_name, field_value;
+        RETURN;
+    END IF;
+
+    prefix := substring(fkey from 1 for wildcardPosition - 1);
+    RETURN QUERY EXECUTE format('
+        SELECT k.key, k.created, k.updated, v.data 
+        FROM public.%I k 
+        INNER JOIN public.%I v ON v.key = k.key
+        WHERE k.key::text ^@ $1::text AND v.data->>$2 = $3
+        ORDER BY k.created DESC', keys_table, values_table) USING prefix, field_name, field_value;
+END;
+$$;
+
+-- Multi-glob query function (supports patterns like "a/*/b/*" or "a/*/b")
+-- Uses regex matching - slower than single-glob prefix matching but more flexible
+CREATE OR REPLACE FUNCTION public.nopog_get_multiglob(tname character varying, pattern character varying) 
+    RETURNS TABLE(key character varying(800), created bigint, updated bigint, data jsonb)
+    LANGUAGE plpgsql
+    AS $$
+DECLARE
+    keys_table text := 'keys_' || tname;
+    values_table text := 'values_' || tname;
+    regex_pattern text;
+BEGIN
+    -- Validate: reject double glob (**) and double separator (//)
+    IF pattern LIKE '%**%' THEN
+        RAISE EXCEPTION 'invalid key: double glob (**) not allowed';
+    END IF;
+    IF pattern LIKE '%//%' THEN
+        RAISE EXCEPTION 'invalid key: double separator (//) not allowed';
+    END IF;
+
+    -- Convert glob pattern to regex:
+    -- * becomes [^/]+ (match any characters except /)
+    -- Escape special regex characters first, then convert *
+    regex_pattern := '^' || regexp_replace(
+        regexp_replace(pattern, '([.+?^${}()|[\]\\])', '\\\1', 'g'),
+        '\*', '[^/]+', 'g'
+    ) || '$';
+
+    RETURN QUERY EXECUTE format('
+        SELECT k.key, k.created, k.updated, v.data 
+        FROM public.%I k 
+        LEFT OUTER JOIN public.%I v ON v.key = k.key
+        WHERE k.key ~ $1
+        ORDER BY k.created DESC', keys_table, values_table) USING regex_pattern;
 END;
 $$;

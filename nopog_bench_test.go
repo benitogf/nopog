@@ -59,6 +59,7 @@ func BenchmarkWritePerformance(b *testing.B) {
 		Host:       testServerIP,
 		Password:   testServerPassword,
 		MaxRetries: 5,
+		Silence:    true,
 	}
 	err := storage.Start()
 	if err != nil {
@@ -111,6 +112,7 @@ func BenchmarkLargeDatasetRangeQuery(b *testing.B) {
 		Host:       testServerIP,
 		Password:   testServerPassword,
 		MaxRetries: 5,
+		Silence:    true,
 	}
 	err := storage.Start()
 	if err != nil {
@@ -125,39 +127,46 @@ func BenchmarkLargeDatasetRangeQuery(b *testing.B) {
 	}
 	storage.Clear(benchTable)
 
-	// Insert 3 million entries
+	// Insert 3 million entries using batch for faster setup
 	const totalEntries = 3_000_000
 	const batchSize = 10000
 	const reportInterval = 100000
 
-	log.Printf("Starting insertion of %d entries...", totalEntries)
+	log.Printf("Starting batch insertion of %d entries...", totalEntries)
 	insertStart := time.Now()
 
 	var firstTimestamp, middleTimestamp, lastTimestamp int64
 
-	for i := 0; i < totalEntries; i++ {
-		key := fmt.Sprintf("bench/%d", i)
-		jsonData := generateLargeJSON(i)
+	for batch := 0; batch < totalEntries/batchSize; batch++ {
+		keys := make([]string, batchSize)
+		values := make([]string, batchSize)
+		for j := 0; j < batchSize; j++ {
+			idx := batch*batchSize + j
+			keys[j] = fmt.Sprintf("bench/%d", idx)
+			values[j] = generateLargeJSON(idx)
+		}
 
-		ts, err := storage.Set(benchTable, key, jsonData)
+		batchTimestamps, err := storage.SetBatch(benchTable, keys, values)
 		if err != nil {
-			b.Fatalf("failed to insert entry %d: %v", i, err)
+			b.Fatalf("failed to insert batch %d: %v", batch, err)
 		}
 
-		if i == 0 {
-			firstTimestamp = ts
+		// Track timestamps at key points
+		if batch == 0 && len(batchTimestamps) > 0 {
+			firstTimestamp = batchTimestamps[0]
 		}
-		if i == totalEntries/2 {
-			middleTimestamp = ts
+		if batch == totalEntries/batchSize/2 && len(batchTimestamps) > 0 {
+			middleTimestamp = batchTimestamps[0]
 		}
-		if i == totalEntries-1 {
-			lastTimestamp = ts
+		if batch == totalEntries/batchSize-1 && len(batchTimestamps) > 0 {
+			lastTimestamp = batchTimestamps[len(batchTimestamps)-1]
 		}
 
-		if (i+1)%reportInterval == 0 {
+		count := (batch + 1) * batchSize
+		if count%reportInterval == 0 {
 			elapsed := time.Since(insertStart)
-			rate := float64(i+1) / elapsed.Seconds()
-			log.Printf("Inserted %d/%d entries (%.0f entries/sec)", i+1, totalEntries, rate)
+			rate := float64(count) / elapsed.Seconds()
+			log.Printf("Inserted %d/%d entries (%.0f entries/sec)", count, totalEntries, rate)
 		}
 	}
 
@@ -247,6 +256,7 @@ func BenchmarkMediumDatasetRangeQuery(b *testing.B) {
 		Host:       testServerIP,
 		Password:   testServerPassword,
 		MaxRetries: 5,
+		Silence:    true,
 	}
 	err := storage.Start()
 	if err != nil {
@@ -389,6 +399,118 @@ func BenchmarkMediumDatasetRangeQuery(b *testing.B) {
 				b.Fatalf("expected 1 result, got %d", len(results))
 			}
 		}
+	})
+
+	// Benchmark JSONB queries
+	b.Run("GetByJSON", func(b *testing.B) {
+		for i := 0; i < b.N; i++ {
+			results, err := storage.GetByJSON(benchTable, "bench/*", `{"category":"cat-25"}`)
+			if err != nil {
+				b.Fatal(err)
+			}
+			_ = results
+		}
+	})
+
+	b.Run("GetByField", func(b *testing.B) {
+		for i := 0; i < b.N; i++ {
+			results, err := storage.GetByField(benchTable, "bench/*", "category", "cat-25")
+			if err != nil {
+				b.Fatal(err)
+			}
+			_ = results
+		}
+	})
+
+	// Benchmark multi-glob queries (regex-based matching)
+	// First, insert some nested data for multi-glob testing
+	b.Run("MultiGlob_Setup_And_Query", func(b *testing.B) {
+		b.StopTimer()
+		// Insert nested structure: stats/userN/clicks/dayM
+		for i := 0; i < 100; i++ {
+			for j := 0; j < 10; j++ {
+				key := fmt.Sprintf("stats/user%d/clicks/day%d", i, j)
+				storage.Set(benchTable, key, `{"count":1}`)
+			}
+		}
+		// Also insert some views data
+		for i := 0; i < 100; i++ {
+			for j := 0; j < 5; j++ {
+				key := fmt.Sprintf("stats/user%d/views/day%d", i, j)
+				storage.Set(benchTable, key, `{"count":1}`)
+			}
+		}
+		b.StartTimer()
+
+		// Multi-glob: stats/*/clicks/* (two wildcards)
+		for i := 0; i < b.N; i++ {
+			results, err := storage.Get(benchTable, "stats/*/clicks/*")
+			if err != nil {
+				b.Fatal(err)
+			}
+			if len(results) != 1000 { // 100 users * 10 days
+				b.Fatalf("expected 1000 results, got %d", len(results))
+			}
+		}
+	})
+
+	b.Run("MultiGlob_MiddleWildcard", func(b *testing.B) {
+		// Multi-glob: stats/*/clicks/day0 (wildcard in middle)
+		for i := 0; i < b.N; i++ {
+			results, err := storage.Get(benchTable, "stats/*/clicks/day0")
+			if err != nil {
+				b.Fatal(err)
+			}
+			if len(results) != 100 { // 100 users
+				b.Fatalf("expected 100 results, got %d", len(results))
+			}
+		}
+	})
+
+	b.Run("SingleGlob_Prefix", func(b *testing.B) {
+		// Single glob at end - uses optimized prefix matching
+		for i := 0; i < b.N; i++ {
+			results, err := storage.Get(benchTable, "stats/*")
+			if err != nil {
+				b.Fatal(err)
+			}
+			// Should get all stats entries (1000 clicks + 500 views = 1500)
+			_ = results
+		}
+	})
+
+	// Compare prepared vs unprepared statements
+	b.Run("PreparedVsUnprepared", func(b *testing.B) {
+		// Unprepared (current approach)
+		b.Run("Unprepared", func(b *testing.B) {
+			for i := 0; i < b.N; i++ {
+				key := "bench/" + strconv.Itoa(i%totalEntries)
+				rows, err := storage.Client.Query("SELECT * FROM public.nopog_get($1, $2)", benchTable, key)
+				if err != nil {
+					b.Fatal(err)
+				}
+				rows.Close()
+			}
+		})
+
+		// Prepared statement
+		b.Run("Prepared", func(b *testing.B) {
+			stmt, err := storage.Client.Prepare("SELECT * FROM public.nopog_get($1, $2)")
+			if err != nil {
+				b.Fatal(err)
+			}
+			defer stmt.Close()
+
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				key := "bench/" + strconv.Itoa(i%totalEntries)
+				rows, err := stmt.Query(benchTable, key)
+				if err != nil {
+					b.Fatal(err)
+				}
+				rows.Close()
+			}
+		})
 	})
 
 	b.StopTimer()

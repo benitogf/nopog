@@ -52,15 +52,20 @@ Clear(table string)
 // Read operations
 Keys(table string) ([]string, error)
 KeysRange(table, path string, from, to int64, limit int) ([]string, error)
-Get(table, path string) ([]Object, error)
+Get(table, path string) ([]Object, error)  // Supports single-glob and multi-glob patterns
 GetN(table, path string, limit int) ([]Object, error)
 GetNRange(table, path string, from, to int64, limit int) ([]Object, error)
 GetRange(table, path string, from, to int64) ([]Object, error)
+GetByJSON(table, path, jsonFilter string) ([]Object, error)  // JSONB containment query
+GetByField(table, path, fieldName, fieldValue string) ([]Object, error)  // JSONB field query
 
 // Write operations
 Set(table, key, value string) (int64, error)
 SetBatch(table string, keys []string, values []string) ([]int64, error)
 Del(table, path string) error
+
+// Monitoring
+TableStats(table string) (*TableStatistics, error)  // Row count and size for partitioning decisions
 ```
 
 ## Quickstart
@@ -121,18 +126,25 @@ err = storage.Del("mydata", "users/*") // Delete all matching pattern
 
 ## Key Patterns
 
-Keys support a single `*` wildcard at the end of the path for prefix matching:
+### Single-Glob (Fast, uses prefix index)
 
 - `users/1` - exact key match
-- `users/*` - all keys starting with `users/` (includes nested keys like `users/1/profile`)
+- `users/*` - all keys starting with `users/`
 - `users/admin/*` - all keys starting with `users/admin/`
 - `*` - all keys
 
-**Note:** Prefix matching returns all descendants. If you need single-level matching, structure your keys accordingly (e.g., use `users/1/` as prefix for user 1's data).
+### Multi-Glob (Slower, uses regex matching)
+
+- `stats/*/clicks/*` - match nested patterns
+- `users/*/profile` - wildcard in middle
+- `a/*/b/*/c` - multiple wildcards
+
+Multi-glob patterns are auto-detected and routed to regex-based matching.
+
+**Note:** Prefix matching returns all descendants. Multi-glob uses `[^/]+` regex (matches any segment).
 
 Invalid patterns (will return error):
-- `users/*/sub` - wildcard in middle
-- `users/**` - multiple wildcards
+- `users/**` - double glob
 - `users//test` - double separator
 
 ## Performance

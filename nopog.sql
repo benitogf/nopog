@@ -68,11 +68,14 @@ BEGIN
     EXECUTE format('
         CREATE TABLE IF NOT EXISTS public.%I (
             key character varying(800) NOT NULL PRIMARY KEY,
-            data json NOT NULL
+            data jsonb NOT NULL
         )', values_table);
 
     EXECUTE format('CREATE INDEX IF NOT EXISTS idx_%I_created ON public.%I (created DESC)', keys_table, keys_table);
     EXECUTE format('CREATE INDEX IF NOT EXISTS idx_%I_key ON public.%I (key)', values_table, values_table);
+    
+    -- Create GIN index for JSONB containment queries (@>, ?, ?&, ?|)
+    EXECUTE format('CREATE INDEX IF NOT EXISTS idx_%I_data_gin ON public.%I USING GIN (data)', values_table, values_table);
     
     -- Create SP-GiST index for ^@ prefix matching operator
     EXECUTE format('CREATE INDEX IF NOT EXISTS idx_%I_key_spgist ON public.%I USING spgist (key)', keys_table, keys_table);
@@ -134,7 +137,7 @@ $$;
 
 -- Get function with table parameter (optimized: filter keys first, then LEFT OUTER JOIN)
 CREATE FUNCTION public.nopog_get(tname character varying, fkey character varying) 
-    RETURNS TABLE(key character varying(800), created bigint, updated bigint, data json)
+    RETURNS TABLE(key character varying(800), created bigint, updated bigint, data jsonb)
     LANGUAGE plpgsql
     AS $$
 DECLARE
@@ -175,7 +178,7 @@ $$;
 
 -- Get with time range function (optimized: filter keys by prefix AND time range first, then LEFT OUTER JOIN)
 CREATE FUNCTION public.nopog_get_range(tname character varying, fkey character varying, time_from bigint, time_to bigint, result_limit integer) 
-    RETURNS TABLE(key character varying(800), created bigint, updated bigint, data json)
+    RETURNS TABLE(key character varying(800), created bigint, updated bigint, data jsonb)
     LANGUAGE plpgsql
     AS $$
 DECLARE
