@@ -107,13 +107,15 @@ func TestGetN(t *testing.T) {
 func TestRange(t *testing.T) {
 	storage := newTestStorage(t)
 	defer storage.Close()
-	firstOpTime, err := storage.Set(testTable, testKey+"1", testObject)
+	// This test isolates rows by using one timestamp as a range bound, so the
+	// two rows need distinct created values. µs wall-clock timestamps can collide
+	// within the same microsecond, so write explicit distinct created values.
+	firstOpTime := int64(1700000000000000)
+	secondOpTime := int64(1700000000000001)
+	err := storage.SetWithMeta(testTable, testKey+"1", testObject, firstOpTime, 0)
 	require.NoError(t, err)
-	secondOpTime, err := storage.Set(testTable, testKey+"2", testObject)
+	err = storage.SetWithMeta(testTable, testKey+"2", testObject, secondOpTime, 0)
 	require.NoError(t, err)
-
-	// Monotonic timestamps guarantee secondOpTime > firstOpTime
-	require.Greater(t, secondOpTime, firstOpTime)
 
 	// Use a range that includes both entries
 	dataList, err := storage.GetNRange(testTable, testKey+"*", firstOpTime, secondOpTime, 2)
@@ -171,9 +173,6 @@ func TestValidGlobPatterns(t *testing.T) {
 func TestInvalidGlobPatterns(t *testing.T) {
 	storage := newTestStorage(t)
 	defer storage.Close()
-
-	// Note: multiple globs and glob in middle are now VALID (multi-glob support)
-	// These patterns now use regex matching instead of prefix matching
 
 	// Invalid: double glob (**) - still invalid
 	_, err := storage.Get(testTable, "items/**")
@@ -362,16 +361,18 @@ func TestKeysRangeWithGlob(t *testing.T) {
 	storage := newTestStorage(t)
 	defer storage.Close()
 
-	firstTime, err := storage.Set(testTable, "range/1", testObject)
+	// This test isolates the middle row by using secondTime as both range bounds,
+	// so the three rows need distinct created values. µs wall-clock timestamps can
+	// collide within the same microsecond, so write explicit distinct created values.
+	firstTime := int64(1700000000000000)
+	secondTime := int64(1700000000000001)
+	thirdTime := int64(1700000000000002)
+	err := storage.SetWithMeta(testTable, "range/1", testObject, firstTime, 0)
 	require.NoError(t, err)
-	secondTime, err := storage.Set(testTable, "range/2", testObject)
+	err = storage.SetWithMeta(testTable, "range/2", testObject, secondTime, 0)
 	require.NoError(t, err)
-	thirdTime, err := storage.Set(testTable, "range/3", testObject)
+	err = storage.SetWithMeta(testTable, "range/3", testObject, thirdTime, 0)
 	require.NoError(t, err)
-
-	// Monotonic timestamps guarantee ordering
-	require.Greater(t, secondTime, firstTime)
-	require.Greater(t, thirdTime, secondTime)
 
 	// Get keys in range that includes only second entry (using secondTime as both bounds)
 	keys, err := storage.KeysRange(testTable, "range/*", secondTime, secondTime, 10)
@@ -442,7 +443,9 @@ func TestUpdateSetsUpdatedTimestamp(t *testing.T) {
 	// Update the entry
 	updatedTime, err := storage.Set(testTable, "upd/1", `{"updated":true}`)
 	require.NoError(t, err)
-	require.Greater(t, updatedTime, createdTime)
+	// µs wall clock is non-decreasing (equal within the same microsecond is possible);
+	// ordering and cursors tiebreak by key rather than relying on strict increase.
+	require.GreaterOrEqual(t, updatedTime, createdTime)
 
 	// Verify created timestamp unchanged and updated timestamp set
 	dataList, err = storage.Get(testTable, "upd/1")
@@ -508,9 +511,10 @@ func TestSetBatch(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 3, len(timestamps))
 
-	// Verify timestamps are strictly increasing
+	// µs wall-clock timestamps are non-decreasing (equal within the same
+	// microsecond is possible); ordering tiebreaks by key.
 	for i := 1; i < len(timestamps); i++ {
-		require.Greater(t, timestamps[i], timestamps[i-1])
+		require.GreaterOrEqual(t, timestamps[i], timestamps[i-1])
 	}
 
 	// Verify all entries were inserted
@@ -735,19 +739,6 @@ func TestStartErrors(t *testing.T) {
 		Host:     testServerIP,
 		Password: testServerPassword,
 		Port:     "5432", // default port, should not be added to conninfo
-		Silence:  true,
-	}
-	err = storage.Start()
-	require.NoError(t, err)
-	storage.Close()
-
-	// Test with non-default port (still connects since it's the same)
-	storage = &Storage{
-		Name:     testServerDatabase,
-		User:     testServerUser,
-		Host:     testServerIP,
-		Password: testServerPassword,
-		Port:     "5432",
 		Silence:  true,
 	}
 	err = storage.Start()
