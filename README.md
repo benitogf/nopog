@@ -8,17 +8,40 @@ Multi-table key-value store using PostgreSQL with JSON column type as value.
 
 ## Schema
 
-![ERD](erd.PNG)
+Each table is a pair: `keys_<table>` holds the key and its timestamps, `values_<table>` holds the JSON payload. A row in `values_<table>` references its key in `keys_<table>`, and deleting the key cascades to the value.
+
+```mermaid
+erDiagram
+    keys_table ||--|| values_table : "key (ON DELETE CASCADE)"
+
+    keys_table {
+        varchar(800) key PK
+        bigint created
+        bigint updated
+    }
+
+    values_table {
+        varchar(800) key PK "FK -> keys_table.key"
+        jsonb data
+    }
+```
 
 ## Features
 
 - **Multi-table support**: Create multiple isolated table pairs (keys_X, values_X)
-- **Monotonic timestamps**: Guaranteed strictly increasing timestamps (microseconds)
 - **Glob pattern matching**: Single `*` at end of path for prefix queries
 - **Optimized range queries**: Dedicated SQL functions filter keys by prefix AND time range before joining
 - **SP-GiST index**: For fast `^@` prefix matching operator
 - **Batch inserts**: `SetBatch` for high-throughput bulk writes (~3000+ entries/sec)
 - **Automatic retry**: Connection and ping retry with configurable max retries
+
+## Timestamps
+
+Timestamps (`created`, `updated`) are `bigint` **microseconds since the Unix epoch** (µs).
+
+Microsecond resolution is a deliberate choice for JavaScript/browser consumers: an epoch-µs value stays below `Number.MAX_SAFE_INTEGER` (2^53 − 1, safe until roughly the year 2255), so it round-trips through JSON and browser number handling without loss. Epoch-**nanoseconds** would exceed that bound today and silently corrupt when parsed as a JavaScript number.
+
+**Tie semantics:** timestamps are not guaranteed to be distinct — two writes within the same microsecond can share an equal `created` value. All ordered reads and pagination cursors therefore tiebreak deterministically by `key`: ordering is by `(created, key)`, so equal timestamps produce a stable, repeatable order.
 
 ## Interface
 
@@ -52,33 +75,85 @@ Clear(table string)
 // Read operations
 Keys(table string) ([]string, error)
 KeysRange(table, path string, from, to int64, limit int) ([]string, error)
-Get(table, path string) ([]Object, error)  // Supports single-glob and multi-glob patterns
+Get(table, path string) ([]Object, error)  // Single trailing-glob prefix or exact key
 GetN(table, path string, limit int) ([]Object, error)
 GetNRange(table, path string, from, to int64, limit int) ([]Object, error)
 GetRange(table, path string, from, to int64) ([]Object, error)
 GetByJSON(table, path, jsonFilter string) ([]Object, error)  // JSONB containment query
 GetByField(table, path, fieldName, fieldValue string) ([]Object, error)  // JSONB field query
+Scan(table string, cursorCreated int64, cursorKey string, limit int) ([]Object, error)  // keyset pagination
+GetRangeSegment(table, path string, from, to int64, limit int, positions []int, value string) ([]Object, error)  // range + path-segment filter
 
 // Write operations
 Set(table, key, value string) (int64, error)
+SetWithMeta(table, key, value string, created, updated int64) error  // upsert with caller-supplied timestamps
 SetBatch(table string, keys []string, values []string) ([]int64, error)
+ImportBatch(table string, entries []Object) (inserted int, err error)  // additive bulk insert, never overwrites
 Del(table, path string) error
 
 // Monitoring
 TableStats(table string) (*TableStatistics, error)  // Row count and size for partitioning decisions
 ```
 
+### SetWithMeta
+
+```go
+SetWithMeta(table, key, value string, created, updated int64) error
+```
+
+Upsert that overwrites `created` and `updated` with caller-supplied µs values instead of stamping the current time. Use it for restore and replication, where the original timestamps must be preserved rather than regenerated.
+
+### ImportBatch
+
+```go
+ImportBatch(table string, entries []Object) (inserted int, err error)
+```
+
+Additive bulk insert. Existing keys are never overwritten (`ON CONFLICT DO NOTHING`); only rows whose keys are not already present are written. Returns the count of rows actually inserted.
+
+### Scan
+
+```go
+Scan(table string, cursorCreated int64, cursorKey string, limit int) ([]Object, error)
+```
+
+Keyset pagination over `(created, key)` in ascending order. Pass the previous page's last row `created` and `key` as `cursorCreated`/`cursorKey` to fetch the next page; pass the zero cursor for the first page. Because ordering tiebreaks by `key`, pagination is stable even when timestamps collide.
+
+### GetRangeSegment
+
+```go
+GetRangeSegment(table, path string, from, to int64, limit int, positions []int, value string) ([]Object, error)
+```
+
+Range query with a path-segment equality filter. Matches keys within the `[from, to)` time window whose path segment at **any** position listed in `positions` equals `value`. For example, `positions` `{3, 4}` with `value` `"42"` matches keys where an id may sit at segment 3 or at segment 4 across two key layouts.
+
+## Schema export
+
+The canonical `nopog.sql` is embedded into the package via `//go:embed` and exposed as:
+
+```go
+nopog.SchemaSQL // string — the embedded contents of nopog.sql
+```
+
+Downstream images can vendor `nopog.SchemaSQL` and guard against drift with a test that compares their copy against it, instead of hand-copying the schema.
+
 ## Quickstart
 
 ### 1. Setup database
 
-Create a database in your PostgreSQL server and run the migration:
+Create a fresh database in your PostgreSQL server, then apply the schema. Either apply the [sql script](nopog.sql) directly:
 
 ```bash
-go run ./migrate/main.go -host=localhost -user=postgres -password=postgres -dbname=postgres
+psql -f nopog.sql
 ```
 
-Or run the [sql script](nopog.sql) directly.
+or run the installer with the same connection flags:
+
+```bash
+go run ./install -host=localhost -user=postgres -password=postgres -dbname=postgres
+```
+
+The schema targets **fresh databases only** — there is no upgrade path from the previous single-table schema. Install into a new database.
 
 ### 2. Install
 
@@ -126,26 +201,23 @@ err = storage.Del("mydata", "users/*") // Delete all matching pattern
 
 ## Key Patterns
 
-### Single-Glob (Fast, uses prefix index)
+### Prefix glob (single trailing `*`)
+
+Only a single `*` at the end of the path is supported:
 
 - `users/1` - exact key match
-- `users/*` - all keys starting with `users/`
-- `users/admin/*` - all keys starting with `users/admin/`
+- `users/*` - all keys under the `users/` prefix
+- `users/admin/*` - all keys under the `users/admin/` prefix
 - `*` - all keys
 
-### Multi-Glob (Slower, uses regex matching)
+**Prefix matching returns ALL depths below the prefix.** End your prefix at a `/` to avoid sibling-family bleed: `a/` matches only children of `a`, whereas `a` (no trailing slash) would also match sibling families like `a_b`.
 
-- `stats/*/clicks/*` - match nested patterns
-- `users/*/profile` - wildcard in middle
-- `a/*/b/*/c` - multiple wildcards
+Invalid patterns (return an error):
 
-Multi-glob patterns are auto-detected and routed to regex-based matching.
-
-**Note:** Prefix matching returns all descendants. Multi-glob uses `[^/]+` regex (matches any segment).
-
-Invalid patterns (will return error):
 - `users/**` - double glob
 - `users//test` - double separator
+- `stats/*/clicks/*` - multiple `*`
+- `users/*/profile` - mid-path `*`
 
 ## Performance
 
@@ -160,18 +232,6 @@ Each table pair uses the following optimized indexes:
 | `idx_keys_<table>_key_spgist` | SP-GiST | `^@` prefix matching operator |
 | `idx_keys_<table>_key_created` | B-tree composite | Combined prefix + time range queries |
 
-### Monotonic Timestamps
-
-Uses a cached PostgreSQL sequence with hybrid approach for high-performance monotonic timestamps:
-
-```sql
-SELECT GREATEST(nextval('monotonic_clock_seq'), extract(epoch from clock_timestamp()) * 1000000)
-```
-
-- **CACHE 1000**: Sequence values cached in memory, minimal disk I/O
-- **Hybrid approach**: Maintains time correlation while guaranteeing monotonicity
-- **~50,000+ calls/sec**: Compared to ~1,000/sec with table-based approach
-
 ### Query Optimization
 
 Range queries (`GetNRange`, `GetRange`, `KeysRange`) use dedicated SQL functions that:
@@ -180,11 +240,6 @@ Range queries (`GetNRange`, `GetRange`, `KeysRange`) use dedicated SQL functions
 3. LEFT OUTER JOIN to values table only for matching rows
 
 This approach is **32x faster** than filtering after join for small time windows.
-
-### SQL Function Optimization
-
-- `valid()` and `monotonic_now()` use `LANGUAGE sql` instead of `LANGUAGE plpgsql` for reduced overhead
-- `valid()` marked as `IMMUTABLE` for query planner optimization
 
 ### Batch Inserts
 
@@ -208,8 +263,6 @@ Batch inserts achieve **~4,000+ entries/sec** vs ~750 entries/sec for individual
 | Batch insert (1000 entries) | ~240ms |
 
 ## Test Coverage
-
-Current test coverage: **75.7%**
 
 Run tests with:
 ```bash
