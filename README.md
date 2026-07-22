@@ -32,7 +32,7 @@ erDiagram
 - **Glob pattern matching**: Single `*` at end of path for prefix queries
 - **Optimized range queries**: Dedicated SQL functions filter keys by prefix AND time range before joining
 - **SP-GiST index**: For fast `^@` prefix matching operator
-- **Batch inserts**: `SetBatch` for high-throughput bulk writes (~3000+ entries/sec)
+- **Batch inserts**: `SetBatch` for high-throughput bulk writes (~4,000+ entries/sec)
 - **Automatic retry**: Connection and ping retry with configurable max retries
 
 ## Timestamps
@@ -61,6 +61,11 @@ type Storage struct {
     Host       string
     Port       string
     MaxRetries int // Maximum connection retries (default 120)
+
+    MaxOpenConns    int           // Maximum open connections (default 50)
+    MaxIdleConns    int           // Maximum idle connections (default 25)
+    ConnMaxLifetime time.Duration // Connection max lifetime (default 5 minutes)
+    ConnMaxIdleTime time.Duration // Connection max idle time (default 1 minute)
 }
 
 // Connection
@@ -125,7 +130,7 @@ Keyset pagination over `(created, key)` in ascending order. Pass the previous pa
 GetRangeSegment(table, path string, from, to int64, limit int, positions []int, value string) ([]Object, error)
 ```
 
-Range query with a path-segment equality filter. Matches keys within the `[from, to)` time window whose path segment at **any** position listed in `positions` equals `value`. For example, `positions` `{3, 4}` with `value` `"42"` matches keys where an id may sit at segment 3 or at segment 4 across two key layouts.
+Range query with a path-segment equality filter. Matches keys within the inclusive `[from, to]` time window (`created >= from AND created <= to`) whose path segment at **any** position listed in `positions` equals `value`. A `to` of `0` is treated as "now" (consistent with `GetNRange`/`GetRange`). For example, `positions` `{3, 4}` with `value` `"42"` matches keys where an id may sit at segment 3 or at segment 4 across two key layouts.
 
 ## Schema export
 
@@ -210,7 +215,9 @@ Only a single `*` at the end of the path is supported:
 - `users/admin/*` - all keys under the `users/admin/` prefix
 - `*` - all keys
 
-**Prefix matching returns ALL depths below the prefix.** End your prefix at a `/` to avoid sibling-family bleed: `a/` matches only children of `a`, whereas `a` (no trailing slash) would also match sibling families like `a_b`.
+**Prefix matching returns ALL depths below the prefix.** End your prefix at a `/` to avoid sibling-family bleed: `a/` matches only children of `a`, whereas `a` (no trailing slash) would also match sibling families like `ab`.
+
+Keys may contain only letters, digits, `/`, and a single trailing `*` — no underscores, hyphens, or dots.
 
 Invalid patterns (return an error):
 
