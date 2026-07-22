@@ -23,6 +23,9 @@ CREATE FUNCTION public.nopog_now() RETURNS bigint
 $$;
 
 -- Create valid function (only allows single * at end of path)
+-- Key charset matches github.com/benitogf/ooo key.IsValid: letters, digits, and
+-- '*' may start/end a key; separators '/', '-', '_', '.' are allowed only in the
+-- middle (a key cannot start or end with one). Single-character keys are allowed.
 -- Using LANGUAGE sql for better performance (no PL/pgSQL overhead)
 CREATE FUNCTION public.valid(fkey character varying) RETURNS boolean
     LANGUAGE sql
@@ -30,7 +33,7 @@ CREATE FUNCTION public.valid(fkey character varying) RETURNS boolean
     AS $_$
     SELECT 
         -- Valid key characters
-        (fkey ~ '^[a-zA-Z\*\d]$|^[a-zA-Z\*\d][a-zA-Z\*\d\/]+[a-zA-Z\*\d]$')
+        (fkey ~ '^[a-zA-Z\*\d]$|^[a-zA-Z\*\d][a-zA-Z\*\d\/._-]*[a-zA-Z\*\d]$')
         -- No duplicate separators
         AND (array_length(string_to_array(fkey, '//'), 1) - 1 = 0)
         -- No wildcard in middle (wildcard count > 0 AND NOT ends with wildcard)

@@ -217,7 +217,7 @@ Only a single `*` at the end of the path is supported:
 
 **Prefix matching returns ALL depths below the prefix.** End your prefix at a `/` to avoid sibling-family bleed: `a/` matches only children of `a`, whereas `a` (no trailing slash) would also match sibling families like `ab`.
 
-Keys may contain only letters, digits, `/`, and a single trailing `*` — no underscores, hyphens, or dots.
+Keys may contain letters, digits, and the separators `/`, `-`, `_`, `.` (plus a single trailing `*` for globs). Separators are allowed only in the middle of a key — a key must start and end with a letter, digit, or `*`. This matches the key character set of [`benitogf/ooo`](https://github.com/benitogf/ooo).
 
 Invalid patterns (return an error):
 
@@ -225,6 +225,7 @@ Invalid patterns (return an error):
 - `users//test` - double separator
 - `stats/*/clicks/*` - multiple `*`
 - `users/*/profile` - mid-path `*`
+- `-users` / `users.` - starts or ends with a separator
 
 ## Performance
 

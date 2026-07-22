@@ -239,12 +239,14 @@ func (db *Storage) Keys(table string) ([]string, error) {
 		var entry Key
 		err = rows.Scan(&entry.Key, &entry.Created, &entry.Updated)
 		if err != nil {
-			db.Console.Err("Keys: failed to parse sql key entry", err)
-			continue
+			return keys, err
 		}
 		keys = append(keys, entry.Key)
 	}
 
+	if err := rows.Err(); err != nil {
+		return keys, err
+	}
 	return keys, nil
 }
 
@@ -261,13 +263,15 @@ func (db *Storage) KeysRange(table, path string, from, to int64, limit int) ([]s
 		var entry Key
 		err = rows.Scan(&entry.Key, &entry.Created, &entry.Updated)
 		if err != nil {
-			db.Console.Err("KeysRange: failed to parse sql entry", path, err)
-			continue
+			return keys, err
 		}
 
 		keys = append(keys, entry.Key)
 	}
 
+	if err := rows.Err(); err != nil {
+		return keys, err
+	}
 	return keys, nil
 }
 
@@ -290,8 +294,7 @@ func (db *Storage) Get(table, path string) ([]Object, error) {
 		var entry Entry
 		err = rows.Scan(&entry.Key, &entry.Created, &entry.Updated, &entry.Data)
 		if err != nil {
-			db.Console.Err("Get: failed to parse sql entry", path, err)
-			continue
+			return res, err
 		}
 
 		updatedTime := int64(0)
@@ -307,6 +310,9 @@ func (db *Storage) Get(table, path string) ([]Object, error) {
 		})
 	}
 
+	if err := rows.Err(); err != nil {
+		return res, err
+	}
 	return res, nil
 }
 
@@ -323,8 +329,7 @@ func (db *Storage) GetN(table, path string, limit int) ([]Object, error) {
 		var entry Entry
 		err = rows.Scan(&entry.Key, &entry.Created, &entry.Updated, &entry.Data)
 		if err != nil {
-			db.Console.Err("GetN: failed to parse sql key entry", err)
-			continue
+			return res, err
 		}
 
 		updatedTime := int64(0)
@@ -340,6 +345,9 @@ func (db *Storage) GetN(table, path string, limit int) ([]Object, error) {
 		})
 	}
 
+	if err := rows.Err(); err != nil {
+		return res, err
+	}
 	return res, nil
 }
 
@@ -357,8 +365,7 @@ func (db *Storage) GetNRange(table, path string, from, to int64, limit int) ([]O
 		var entry Entry
 		err = rows.Scan(&entry.Key, &entry.Created, &entry.Updated, &entry.Data)
 		if err != nil {
-			db.Console.Err("GetNRange: failed to parse sql entry", path, err)
-			continue
+			return res, err
 		}
 
 		updatedTime := int64(0)
@@ -374,6 +381,9 @@ func (db *Storage) GetNRange(table, path string, from, to int64, limit int) ([]O
 		})
 	}
 
+	if err := rows.Err(); err != nil {
+		return res, err
+	}
 	return res, nil
 }
 
@@ -392,8 +402,7 @@ func (db *Storage) GetRange(table, path string, from, to int64) ([]Object, error
 		var entry Entry
 		err = rows.Scan(&entry.Key, &entry.Created, &entry.Updated, &entry.Data)
 		if err != nil {
-			db.Console.Err("GetRange: failed to parse sql entry", path, err)
-			continue
+			return res, err
 		}
 
 		updatedTime := int64(0)
@@ -409,6 +418,9 @@ func (db *Storage) GetRange(table, path string, from, to int64) ([]Object, error
 		})
 	}
 
+	if err := rows.Err(); err != nil {
+		return res, err
+	}
 	return res, nil
 }
 
@@ -529,8 +541,7 @@ func (db *Storage) Scan(table string, cursorCreated int64, cursorKey string, lim
 		var entry Entry
 		err = rows.Scan(&entry.Key, &entry.Created, &entry.Updated, &entry.Data)
 		if err != nil {
-			db.Console.Err("Scan: failed to parse sql entry", err)
-			continue
+			return res, err
 		}
 		updatedTime := int64(0)
 		if entry.Updated.Valid {
@@ -542,6 +553,9 @@ func (db *Storage) Scan(table string, cursorCreated int64, cursorKey string, lim
 			Key:     entry.Key,
 			Value:   entry.Data,
 		})
+	}
+	if err := rows.Err(); err != nil {
+		return res, err
 	}
 	return res, nil
 }
@@ -561,8 +575,7 @@ func (db *Storage) GetRangeSegment(table, path string, from, to int64, limit int
 		var entry Entry
 		err = rows.Scan(&entry.Key, &entry.Created, &entry.Updated, &entry.Data)
 		if err != nil {
-			db.Console.Err("GetRangeSegment: failed to parse sql entry", path, err)
-			continue
+			return res, err
 		}
 		updatedTime := int64(0)
 		if entry.Updated.Valid {
@@ -574,6 +587,9 @@ func (db *Storage) GetRangeSegment(table, path string, from, to int64, limit int
 			Key:     entry.Key,
 			Value:   entry.Data,
 		})
+	}
+	if err := rows.Err(); err != nil {
+		return res, err
 	}
 	return res, nil
 }
@@ -606,8 +622,7 @@ func (db *Storage) GetByJSON(table, path, jsonFilter string) ([]Object, error) {
 		var entry Entry
 		err = rows.Scan(&entry.Key, &entry.Created, &entry.Updated, &entry.Data)
 		if err != nil {
-			db.Console.Err("GetByJSON: failed to parse sql entry", path, err)
-			continue
+			return res, err
 		}
 
 		updatedTime := int64(0)
@@ -623,6 +638,9 @@ func (db *Storage) GetByJSON(table, path, jsonFilter string) ([]Object, error) {
 		})
 	}
 
+	if err := rows.Err(); err != nil {
+		return res, err
+	}
 	return res, nil
 }
 
@@ -641,8 +659,7 @@ func (db *Storage) GetByField(table, path, fieldName, fieldValue string) ([]Obje
 		var entry Entry
 		err = rows.Scan(&entry.Key, &entry.Created, &entry.Updated, &entry.Data)
 		if err != nil {
-			db.Console.Err("GetByField: failed to parse sql entry", path, err)
-			continue
+			return res, err
 		}
 
 		updatedTime := int64(0)
@@ -658,6 +675,9 @@ func (db *Storage) GetByField(table, path, fieldName, fieldValue string) ([]Obje
 		})
 	}
 
+	if err := rows.Err(); err != nil {
+		return res, err
+	}
 	return res, nil
 }
 

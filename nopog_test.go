@@ -183,6 +183,44 @@ func TestInvalidGlobPatterns(t *testing.T) {
 	require.Error(t, err)
 }
 
+// TestKeyCharset verifies the key validator accepts the same character set as
+// github.com/benitogf/ooo key.IsValid: '-', '_', '.' allowed in the middle,
+// two-character keys allowed, separators rejected at the start/end of a key.
+func TestKeyCharset(t *testing.T) {
+	storage := newTestStorage(t)
+	defer storage.Close()
+
+	// Valid: '-', '_', '.' in the middle of a key (round-trips through Set/Get).
+	validKeys := []string{
+		"foo-bar/baz_qux/v.1", // all three separators, alphanumeric ends
+		"a-b",                 // hyphen in the middle
+		"a_b",                 // underscore in the middle
+		"a.b",                 // dot in the middle
+		"ab",                  // two-character key (previously rejected)
+		"a",                   // single-character key
+	}
+	for _, k := range validKeys {
+		_, err := storage.Set(testTable, k, testObject)
+		require.NoErrorf(t, err, "expected key %q to be valid", k)
+		got, err := storage.Get(testTable, k)
+		require.NoError(t, err)
+		require.Lenf(t, got, 1, "expected to read back key %q", k)
+		require.Equal(t, k, got[0].Key)
+	}
+
+	// Invalid: a separator at the start or end of the key.
+	invalidKeys := []string{
+		"-abc", // starts with a separator
+		"abc.", // ends with a separator
+		"_x/y", // starts with a separator
+		"x/y-", // ends with a separator
+	}
+	for _, k := range invalidKeys {
+		_, err := storage.Set(testTable, k, testObject)
+		require.Errorf(t, err, "expected key %q to be rejected", k)
+	}
+}
+
 func TestPrefixMatching(t *testing.T) {
 	storage := newTestStorage(t)
 	defer storage.Close()
