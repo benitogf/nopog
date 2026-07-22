@@ -466,6 +466,10 @@ func (db *Storage) SetBatch(table string, keys []string, values []string) ([]int
 		if err != nil {
 			return nil, err
 		}
+	} else if err := res.Err(); err != nil {
+		// A false Next() with an error is a mid-stream/transport failure, not an
+		// empty result — surface it rather than returning nil timestamps as success.
+		return nil, err
 	}
 
 	return timestamps, nil
