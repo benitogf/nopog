@@ -2,6 +2,7 @@ package nopog
 
 import (
 	"database/sql"
+	_ "embed"
 	"encoding/json"
 	"fmt"
 	"strconv"
@@ -11,6 +12,12 @@ import (
 	"github.com/benitogf/coat"
 	"github.com/lib/pq"
 )
+
+// SchemaSQL is the canonical nopog.sql schema, embedded at build time so it can
+// be applied programmatically (see the install tool) without a separate file.
+//
+//go:embed nopog.sql
+var SchemaSQL string
 
 // Object : data structure of elements
 type Object struct {
@@ -91,30 +98,6 @@ func getByJSONQuery() string {
 
 func getByFieldQuery() string {
 	return "select * from public.nopog_get_by_field($1, $2, $3, $4)"
-}
-
-func getMultiGlobQuery() string {
-	return "select * from public.nopog_get_multiglob($1, $2)"
-}
-
-// isMultiGlob detects if a pattern has multiple wildcards or wildcard in middle
-// Returns true for patterns like "a/*/b/*" or "a/*/b" that need regex matching
-func isMultiGlob(pattern string) bool {
-	wildcardCount := 0
-	lastWildcardPos := -1
-	for i, c := range pattern {
-		if c == '*' {
-			wildcardCount++
-			lastWildcardPos = i
-		}
-	}
-	if wildcardCount > 1 {
-		return true
-	}
-	if wildcardCount == 1 && lastWildcardPos != len(pattern)-1 {
-		return true
-	}
-	return false
 }
 
 // Start the storage client with retry logic and ping verification
@@ -289,20 +272,15 @@ func (db *Storage) KeysRange(table, path string, from, to int64, limit int) ([]s
 }
 
 // Get a key/pattern related value(s) from a table
-// Supports single glob at end (fast, uses prefix index) and multi-glob patterns (slower, uses regex)
-// Examples: "users/*" (single glob), "stats/*/data/*" (multi-glob)
+// Supports an exact key or a single trailing glob (fast, uses prefix index).
+// Examples: "users/1" (exact), "users/*" (single glob).
+// Multi-glob patterns (e.g. "a/*/b") are rejected as invalid keys.
+// Timestamps are microseconds since epoch; equal created values are possible
+// within the same µs, and ordering tiebreaks by key.
 func (db *Storage) Get(table, path string) ([]Object, error) {
 	res := []Object{}
 
-	// Auto-detect multi-glob patterns and use appropriate query
-	var rows *sql.Rows
-	var err error
-	if isMultiGlob(path) {
-		rows, err = db.Client.Query(getMultiGlobQuery()+";", table, path)
-	} else {
-		rows, err = db.Client.Query(getQuery()+";", table, path)
-	}
-
+	rows, err := db.Client.Query(getQuery()+";", table, path)
 	if err != nil {
 		db.Console.Err("Get: failed get on sql", path, err)
 		return res, err
@@ -365,7 +343,8 @@ func (db *Storage) GetN(table, path string, limit int) ([]Object, error) {
 	return res, nil
 }
 
-// GetNRange get last N elements of a pattern related value(s) created in a time range. "to = 0" is treated as now
+// GetNRange get last N elements of a pattern related value(s) created in a time range. "to = 0" is treated as now.
+// Time bounds are microseconds since epoch; ordering tiebreaks by key.
 func (db *Storage) GetNRange(table, path string, from, to int64, limit int) ([]Object, error) {
 	res := []Object{}
 	rows, err := db.Client.Query(getRangeQuery()+";", table, path, from, to, limit)
@@ -398,7 +377,8 @@ func (db *Storage) GetNRange(table, path string, from, to int64, limit int) ([]O
 	return res, nil
 }
 
-// GetRange get elements of a pattern related value(s) created in a time range. "to = 0" is treated as now
+// GetRange get elements of a pattern related value(s) created in a time range. "to = 0" is treated as now.
+// Time bounds are microseconds since epoch; ordering tiebreaks by key.
 // Uses a high limit (1 billion) to effectively get all results
 func (db *Storage) GetRange(table, path string, from, to int64) ([]Object, error) {
 	res := []Object{}
@@ -432,7 +412,9 @@ func (db *Storage) GetRange(table, path string, from, to int64) ([]Object, error
 	return res, nil
 }
 
-// Set a value in a table
+// Set a value in a table, returning the created timestamp in microseconds since
+// epoch. Equal timestamps are possible for writes within the same microsecond;
+// ordering and cursors tiebreak by key.
 func (db *Storage) Set(table, key, value string) (int64, error) {
 	entryTime := int64(0)
 
@@ -475,6 +457,125 @@ func (db *Storage) SetBatch(table string, keys []string, values []string) ([]int
 	}
 
 	return timestamps, nil
+}
+
+// SetWithMeta sets a value with caller-supplied created/updated timestamps,
+// overwriting both on conflict. Timestamps are microseconds since epoch.
+func (db *Storage) SetWithMeta(table, key, value string, created, updated int64) error {
+	_, err := db.Client.Exec("select public.nopog_set_meta($1, $2, $3, $4, $5);", table, key, value, created, updated)
+	if err != nil {
+		db.Console.Err("SetWithMeta: failed set_meta on sql", key, err)
+		return err
+	}
+	return nil
+}
+
+// ImportBatch additively imports entries; existing rows always win. An entry
+// with Updated == 0 is stored as a NULL updated. Returns the number of rows
+// actually inserted (genuinely new keys). Timestamps are microseconds since epoch.
+func (db *Storage) ImportBatch(table string, entries []Object) (inserted int, err error) {
+	if len(entries) == 0 {
+		return 0, nil
+	}
+
+	const chunkSize = 1000
+	for start := 0; start < len(entries); start += chunkSize {
+		end := start + chunkSize
+		if end > len(entries) {
+			end = len(entries)
+		}
+		chunk := entries[start:end]
+
+		keys := make([]string, len(chunk))
+		created := make([]int64, len(chunk))
+		updated := make([]sql.NullInt64, len(chunk))
+		values := make([]string, len(chunk))
+		for i, e := range chunk {
+			keys[i] = e.Key
+			created[i] = e.Created
+			if e.Updated == 0 {
+				updated[i] = sql.NullInt64{}
+			} else {
+				updated[i] = sql.NullInt64{Int64: e.Updated, Valid: true}
+			}
+			values[i] = string(e.Value)
+		}
+
+		var chunkInserted int
+		row := db.Client.QueryRow("select public.nopog_import($1, $2, $3, $4, $5);",
+			table, pq.Array(keys), pq.Array(created), pq.Array(updated), pq.Array(values))
+		if err = row.Scan(&chunkInserted); err != nil {
+			db.Console.Err("ImportBatch: failed import on sql", err)
+			return inserted, err
+		}
+		inserted += chunkInserted
+	}
+
+	return inserted, nil
+}
+
+// Scan walks the table by keyset pagination ordered ascending by (created, key),
+// returning up to limit rows strictly after the (cursorCreated, cursorKey) cursor.
+// The cursor is stable under equal created values because it tiebreaks by key.
+func (db *Storage) Scan(table string, cursorCreated int64, cursorKey string, limit int) ([]Object, error) {
+	res := []Object{}
+	rows, err := db.Client.Query("select * from public.nopog_scan($1, $2, $3, $4);", table, cursorCreated, cursorKey, limit)
+	if err != nil {
+		db.Console.Err("Scan: failed scan on sql", err)
+		return res, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var entry Entry
+		err = rows.Scan(&entry.Key, &entry.Created, &entry.Updated, &entry.Data)
+		if err != nil {
+			db.Console.Err("Scan: failed to parse sql entry", err)
+			continue
+		}
+		updatedTime := int64(0)
+		if entry.Updated.Valid {
+			updatedTime = entry.Updated.Int64
+		}
+		res = append(res, Object{
+			Created: entry.Created,
+			Updated: updatedTime,
+			Key:     entry.Key,
+			Value:   entry.Data,
+		})
+	}
+	return res, nil
+}
+
+// GetRangeSegment returns entries in a time range whose key has any of the given
+// path-segment positions (1-based, '/'-delimited) equal to value. "to = 0" is now.
+func (db *Storage) GetRangeSegment(table, path string, from, to int64, limit int, positions []int, value string) ([]Object, error) {
+	res := []Object{}
+	rows, err := db.Client.Query("select * from public.nopog_get_range_segment($1, $2, $3, $4, $5, $6, $7);",
+		table, path, from, to, limit, pq.Array(positions), value)
+	if err != nil {
+		db.Console.Err("GetRangeSegment: failed get on sql", path, err)
+		return res, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var entry Entry
+		err = rows.Scan(&entry.Key, &entry.Created, &entry.Updated, &entry.Data)
+		if err != nil {
+			db.Console.Err("GetRangeSegment: failed to parse sql entry", path, err)
+			continue
+		}
+		updatedTime := int64(0)
+		if entry.Updated.Valid {
+			updatedTime = entry.Updated.Int64
+		}
+		res = append(res, Object{
+			Created: entry.Created,
+			Updated: updatedTime,
+			Key:     entry.Key,
+			Value:   entry.Data,
+		})
+	}
+	return res, nil
 }
 
 // Del a key/pattern value(s) from a table

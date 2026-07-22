@@ -1,6 +1,6 @@
 --
 -- nopog PostgreSQL schema
--- Multi-table key-value store with monotonic timestamps (microseconds since epoch)
+-- Multi-table key-value store with microsecond wall-clock timestamps (microseconds since epoch)
 --
 
 SET statement_timeout = 0;
@@ -13,20 +13,13 @@ SET standard_conforming_strings = on;
 SELECT pg_catalog.set_config('search_path', '', false);
 SET check_function_bodies = false;
 
--- Create monotonic clock sequence with cache for high performance
--- CACHE 1000 keeps values in memory, reducing disk I/O and lock contention
-CREATE SEQUENCE IF NOT EXISTS public.monotonic_clock_seq CACHE 1000;
-
--- Create monotonic timestamp function using cached sequence
--- Returns microseconds since epoch, guaranteed to be strictly increasing
--- Hybrid approach: uses GREATEST of sequence and current time to maintain time correlation
-CREATE FUNCTION public.monotonic_now() RETURNS bigint
+-- Create timestamp function returning microseconds since epoch.
+-- µs wall clock; equal values are possible within the same microsecond;
+-- all ordering and cursors tiebreak by key.
+CREATE FUNCTION public.nopog_now() RETURNS bigint
     LANGUAGE sql
     AS $$
-    SELECT GREATEST(
-        nextval('public.monotonic_clock_seq'),
-        (extract(epoch from clock_timestamp()) * 1000000)::bigint
-    )
+    SELECT (extract(epoch from clock_timestamp()) * 1000000)::bigint
 $$;
 
 -- Create valid function (only allows single * at end of path)
@@ -153,15 +146,15 @@ BEGIN
 
     IF fkey = '*' THEN
         RETURN QUERY EXECUTE format('
-            SELECT k.key, k.created, k.updated, v.data 
+            SELECT k.key, k.created, k.updated, v.data
             FROM public.%I k LEFT OUTER JOIN public.%I v ON v.key = k.key
-            ORDER BY k.created DESC', keys_table, values_table);
+            ORDER BY k.created DESC, k.key DESC', keys_table, values_table);
         RETURN;
     END IF;
 
     IF noWildcard THEN
         RETURN QUERY EXECUTE format('
-            SELECT k.key, k.created, k.updated, v.data 
+            SELECT k.key, k.created, k.updated, v.data
             FROM public.%I k LEFT OUTER JOIN public.%I v ON v.key = k.key
             WHERE k.key = $1', keys_table, values_table) USING fkey;
         RETURN;
@@ -169,10 +162,10 @@ BEGIN
 
     prefix := substring(fkey from 1 for wildcardPosition - 1);
     RETURN QUERY EXECUTE format('
-        SELECT k.key, k.created, k.updated, v.data 
+        SELECT k.key, k.created, k.updated, v.data
         FROM public.%I k LEFT OUTER JOIN public.%I v ON v.key = k.key
         WHERE k.key::text ^@ $1::text
-        ORDER BY k.created DESC', keys_table, values_table) USING prefix;
+        ORDER BY k.created DESC, k.key DESC', keys_table, values_table) USING prefix;
 END;
 $$;
 
@@ -194,24 +187,24 @@ BEGIN
     END IF;
     
     IF time_to = 0 THEN
-        effective_to := public.monotonic_now();
+        effective_to := public.nopog_now();
     ELSE
         effective_to := time_to;
     END IF;
 
     IF fkey = '*' THEN
         RETURN QUERY EXECUTE format('
-            SELECT k.key, k.created, k.updated, v.data 
+            SELECT k.key, k.created, k.updated, v.data
             FROM public.%I k LEFT OUTER JOIN public.%I v ON v.key = k.key
             WHERE k.created >= $1 AND k.created <= $2
-            ORDER BY k.created DESC
+            ORDER BY k.created DESC, k.key DESC
             LIMIT $3', keys_table, values_table) USING time_from, effective_to, result_limit;
         RETURN;
     END IF;
 
     IF noWildcard THEN
         RETURN QUERY EXECUTE format('
-            SELECT k.key, k.created, k.updated, v.data 
+            SELECT k.key, k.created, k.updated, v.data
             FROM public.%I k LEFT OUTER JOIN public.%I v ON v.key = k.key
             WHERE k.key = $1 AND k.created >= $2 AND k.created <= $3
             LIMIT $4', keys_table, values_table) USING fkey, time_from, effective_to, result_limit;
@@ -220,10 +213,10 @@ BEGIN
 
     prefix := substring(fkey from 1 for wildcardPosition - 1);
     RETURN QUERY EXECUTE format('
-        SELECT k.key, k.created, k.updated, v.data 
+        SELECT k.key, k.created, k.updated, v.data
         FROM public.%I k LEFT OUTER JOIN public.%I v ON v.key = k.key
         WHERE k.key::text ^@ $1::text AND k.created >= $2 AND k.created <= $3
-        ORDER BY k.created DESC
+        ORDER BY k.created DESC, k.key DESC
         LIMIT $4', keys_table, values_table) USING prefix, time_from, effective_to, result_limit;
 END;
 $$;
@@ -245,7 +238,7 @@ BEGIN
     END IF;
     
     IF time_to = 0 THEN
-        effective_to := public.monotonic_now();
+        effective_to := public.nopog_now();
     ELSE
         effective_to := time_to;
     END IF;
@@ -254,7 +247,7 @@ BEGIN
         RETURN QUERY EXECUTE format('
             SELECT key, created, updated FROM public.%I
             WHERE created >= $1 AND created <= $2
-            ORDER BY created DESC
+            ORDER BY created DESC, key DESC
             LIMIT $3', keys_table) USING time_from, effective_to, result_limit;
         RETURN;
     END IF;
@@ -271,7 +264,7 @@ BEGIN
     RETURN QUERY EXECUTE format('
         SELECT key, created, updated FROM public.%I
         WHERE key::text ^@ $1::text AND created >= $2 AND created <= $3
-        ORDER BY created DESC
+        ORDER BY created DESC, key DESC
         LIMIT $4', keys_table) USING prefix, time_from, effective_to, result_limit;
 END;
 $$;
@@ -292,7 +285,7 @@ BEGIN
     END IF;
 
     IF fkey = '*' THEN
-        RETURN QUERY EXECUTE format('SELECT key, created, updated FROM public.%I ORDER BY created DESC', keys_table);
+        RETURN QUERY EXECUTE format('SELECT key, created, updated FROM public.%I ORDER BY created DESC, key DESC', keys_table);
         RETURN;
     END IF;
 
@@ -303,9 +296,9 @@ BEGIN
 
     prefix := substring(fkey from 1 for poswildcard - 1);
     RETURN QUERY EXECUTE format('
-        SELECT key, created, updated FROM public.%I 
+        SELECT key, created, updated FROM public.%I
         WHERE key::text ^@ $1::text
-        ORDER BY created DESC', keys_table) USING prefix;
+        ORDER BY created DESC, key DESC', keys_table) USING prefix;
 END;
 $$;
 
@@ -329,7 +322,7 @@ BEGIN
             RAISE EXCEPTION 'invalid key: %', fkeys[i];
         END IF;
         
-        curtime := public.monotonic_now();
+        curtime := public.nopog_now();
         
         EXECUTE format('
             INSERT INTO public.%I (key, created, updated) VALUES ($1, $2, NULL)
@@ -363,7 +356,7 @@ BEGIN
         RAISE EXCEPTION 'invalid key';
     END IF;
 
-    curtime := public.monotonic_now();
+    curtime := public.nopog_now();
 
     -- Upsert into keys table
     EXECUTE format('
@@ -376,7 +369,247 @@ BEGIN
         INSERT INTO public.%I (key, data) VALUES ($1, $2)
         ON CONFLICT (key) DO UPDATE SET data = $2
     ', values_table) USING fkey, jvalue;
-    
+
     RETURN curtime;
+END;
+$$;
+
+-- Query by JSONB containment (uses GIN index)
+-- Example: SELECT * FROM nopog_get_by_json('mytable', 'prefix/*', '{"status":"active"}')
+CREATE FUNCTION public.nopog_get_by_json(tname character varying, fkey character varying, json_filter jsonb)
+    RETURNS TABLE(key character varying(800), created bigint, updated bigint, data jsonb)
+    LANGUAGE plpgsql
+    AS $$
+DECLARE
+    keys_table text := 'keys_' || tname;
+    values_table text := 'values_' || tname;
+    wildcardPosition integer := position('*' IN fkey);
+    noWildcard bool := wildcardPosition = 0;
+    prefix character varying;
+BEGIN
+    IF NOT public.valid(fkey) THEN
+        RAISE EXCEPTION 'invalid key';
+    END IF;
+
+    IF fkey = '*' THEN
+        RETURN QUERY EXECUTE format('
+            SELECT k.key, k.created, k.updated, v.data
+            FROM public.%I k
+            INNER JOIN public.%I v ON v.key = k.key
+            WHERE v.data @> $1
+            ORDER BY k.created DESC, k.key DESC', keys_table, values_table) USING json_filter;
+        RETURN;
+    END IF;
+
+    IF noWildcard THEN
+        RETURN QUERY EXECUTE format('
+            SELECT k.key, k.created, k.updated, v.data
+            FROM public.%I k
+            INNER JOIN public.%I v ON v.key = k.key
+            WHERE k.key = $1 AND v.data @> $2', keys_table, values_table) USING fkey, json_filter;
+        RETURN;
+    END IF;
+
+    prefix := substring(fkey from 1 for wildcardPosition - 1);
+    RETURN QUERY EXECUTE format('
+        SELECT k.key, k.created, k.updated, v.data
+        FROM public.%I k
+        INNER JOIN public.%I v ON v.key = k.key
+        WHERE k.key::text ^@ $1::text AND v.data @> $2
+        ORDER BY k.created DESC, k.key DESC', keys_table, values_table) USING prefix, json_filter;
+END;
+$$;
+
+-- Query by JSONB field value
+-- Example: SELECT * FROM nopog_get_by_field('mytable', 'prefix/*', 'status', 'active')
+CREATE FUNCTION public.nopog_get_by_field(tname character varying, fkey character varying, field_name text, field_value text)
+    RETURNS TABLE(key character varying(800), created bigint, updated bigint, data jsonb)
+    LANGUAGE plpgsql
+    AS $$
+DECLARE
+    keys_table text := 'keys_' || tname;
+    values_table text := 'values_' || tname;
+    wildcardPosition integer := position('*' IN fkey);
+    noWildcard bool := wildcardPosition = 0;
+    prefix character varying;
+BEGIN
+    IF NOT public.valid(fkey) THEN
+        RAISE EXCEPTION 'invalid key';
+    END IF;
+
+    IF fkey = '*' THEN
+        RETURN QUERY EXECUTE format('
+            SELECT k.key, k.created, k.updated, v.data
+            FROM public.%I k
+            INNER JOIN public.%I v ON v.key = k.key
+            WHERE v.data->>$1 = $2
+            ORDER BY k.created DESC, k.key DESC', keys_table, values_table) USING field_name, field_value;
+        RETURN;
+    END IF;
+
+    IF noWildcard THEN
+        RETURN QUERY EXECUTE format('
+            SELECT k.key, k.created, k.updated, v.data
+            FROM public.%I k
+            INNER JOIN public.%I v ON v.key = k.key
+            WHERE k.key = $1 AND v.data->>$2 = $3', keys_table, values_table) USING fkey, field_name, field_value;
+        RETURN;
+    END IF;
+
+    prefix := substring(fkey from 1 for wildcardPosition - 1);
+    RETURN QUERY EXECUTE format('
+        SELECT k.key, k.created, k.updated, v.data
+        FROM public.%I k
+        INNER JOIN public.%I v ON v.key = k.key
+        WHERE k.key::text ^@ $1::text AND v.data->>$2 = $3
+        ORDER BY k.created DESC, k.key DESC', keys_table, values_table) USING prefix, field_name, field_value;
+END;
+$$;
+
+-- Set with caller-supplied created/updated timestamps (overwrites both on conflict).
+-- µs wall clock; ordering and cursors tiebreak by key.
+CREATE FUNCTION public.nopog_set_meta(tname character varying, fkey character varying, fvalue character varying, fcreated bigint, fupdated bigint) RETURNS void
+    LANGUAGE plpgsql
+    AS $$
+DECLARE
+    keys_table text := 'keys_' || tname;
+    values_table text := 'values_' || tname;
+    jvalue json := fvalue::json;
+    wildcardPosition integer := position('*' IN fkey);
+BEGIN
+    IF NOT public.valid(fkey) OR wildcardPosition > 0 THEN
+        RAISE EXCEPTION 'invalid key';
+    END IF;
+
+    EXECUTE format('
+        INSERT INTO public.%I (key, created, updated) VALUES ($1, $2, $3)
+        ON CONFLICT (key) DO UPDATE SET created = EXCLUDED.created, updated = EXCLUDED.updated
+    ', keys_table) USING fkey, fcreated, fupdated;
+
+    EXECUTE format('
+        INSERT INTO public.%I (key, data) VALUES ($1, $2)
+        ON CONFLICT (key) DO UPDATE SET data = $2
+    ', values_table) USING fkey, jvalue;
+END;
+$$;
+
+-- Additive batch import: existing rows always win (ON CONFLICT DO NOTHING).
+-- Returns the number of rows actually inserted into the keys table.
+CREATE FUNCTION public.nopog_import(tname character varying, fkeys character varying[], fcreated bigint[], fupdated bigint[], fvalues character varying[]) RETURNS integer
+    LANGUAGE plpgsql
+    AS $$
+DECLARE
+    keys_table text := 'keys_' || tname;
+    values_table text := 'values_' || tname;
+    inserted integer := 0;
+    affected integer;
+    i integer;
+BEGIN
+    IF array_length(fkeys, 1) IS DISTINCT FROM array_length(fcreated, 1)
+        OR array_length(fkeys, 1) IS DISTINCT FROM array_length(fupdated, 1)
+        OR array_length(fkeys, 1) IS DISTINCT FROM array_length(fvalues, 1) THEN
+        RAISE EXCEPTION 'keys, created, updated and values arrays must have same length';
+    END IF;
+
+    IF fkeys IS NULL OR array_length(fkeys, 1) IS NULL THEN
+        RETURN 0;
+    END IF;
+
+    FOR i IN 1..array_length(fkeys, 1) LOOP
+        IF NOT public.valid(fkeys[i]) OR position('*' IN fkeys[i]) > 0 THEN
+            RAISE EXCEPTION 'invalid key: %', fkeys[i];
+        END IF;
+
+        EXECUTE format('
+            INSERT INTO public.%I (key, created, updated) VALUES ($1, $2, $3)
+            ON CONFLICT (key) DO NOTHING
+        ', keys_table) USING fkeys[i], fcreated[i], fupdated[i];
+        GET DIAGNOSTICS affected = ROW_COUNT;
+
+        EXECUTE format('
+            INSERT INTO public.%I (key, data) VALUES ($1, $2::json)
+            ON CONFLICT (key) DO NOTHING
+        ', values_table) USING fkeys[i], fvalues[i];
+
+        inserted := inserted + affected;
+    END LOOP;
+
+    RETURN inserted;
+END;
+$$;
+
+-- Keyset pagination scan ordered by (created, key) ascending.
+-- Rows strictly after the (cursor_created, cursor_key) cursor, up to result_limit.
+CREATE FUNCTION public.nopog_scan(tname character varying, cursor_created bigint, cursor_key character varying, result_limit integer)
+    RETURNS TABLE(key character varying(800), created bigint, updated bigint, data jsonb)
+    LANGUAGE plpgsql
+    AS $$
+DECLARE
+    keys_table text := 'keys_' || tname;
+    values_table text := 'values_' || tname;
+BEGIN
+    RETURN QUERY EXECUTE format('
+        SELECT k.key, k.created, k.updated, v.data
+        FROM public.%I k LEFT OUTER JOIN public.%I v ON v.key = k.key
+        WHERE (k.created, k.key) > ($1, $2)
+        ORDER BY k.created ASC, k.key ASC
+        LIMIT $3', keys_table, values_table) USING cursor_created, cursor_key, result_limit;
+END;
+$$;
+
+-- Get with time range plus a path-segment equality filter.
+-- A key matches when split_part(key, '/', p) = seg_value for ANY p in seg_positions.
+CREATE FUNCTION public.nopog_get_range_segment(tname character varying, fkey character varying, time_from bigint, time_to bigint, result_limit integer, seg_positions integer[], seg_value character varying)
+    RETURNS TABLE(key character varying(800), created bigint, updated bigint, data jsonb)
+    LANGUAGE plpgsql
+    AS $$
+DECLARE
+    keys_table text := 'keys_' || tname;
+    values_table text := 'values_' || tname;
+    wildcardPosition integer := position('*' IN fkey);
+    noWildcard bool := wildcardPosition = 0;
+    prefix character varying;
+    effective_to bigint;
+BEGIN
+    IF NOT public.valid(fkey) THEN
+        RAISE EXCEPTION 'invalid key';
+    END IF;
+
+    IF time_to = 0 THEN
+        effective_to := public.nopog_now();
+    ELSE
+        effective_to := time_to;
+    END IF;
+
+    IF fkey = '*' THEN
+        RETURN QUERY EXECUTE format('
+            SELECT k.key, k.created, k.updated, v.data
+            FROM public.%I k LEFT OUTER JOIN public.%I v ON v.key = k.key
+            WHERE k.created >= $1 AND k.created <= $2
+              AND EXISTS (SELECT 1 FROM unnest($4::integer[]) p WHERE split_part(k.key, ''/'', p) = $5)
+            ORDER BY k.created DESC, k.key DESC
+            LIMIT $3', keys_table, values_table) USING time_from, effective_to, result_limit, seg_positions, seg_value;
+        RETURN;
+    END IF;
+
+    IF noWildcard THEN
+        RETURN QUERY EXECUTE format('
+            SELECT k.key, k.created, k.updated, v.data
+            FROM public.%I k LEFT OUTER JOIN public.%I v ON v.key = k.key
+            WHERE k.key = $1 AND k.created >= $2 AND k.created <= $3
+              AND EXISTS (SELECT 1 FROM unnest($5::integer[]) p WHERE split_part(k.key, ''/'', p) = $6)
+            ORDER BY k.created DESC, k.key DESC
+            LIMIT $4', keys_table, values_table) USING fkey, time_from, effective_to, result_limit, seg_positions, seg_value;
+        RETURN;
+    END IF;
+
+    prefix := substring(fkey from 1 for wildcardPosition - 1);
+    RETURN QUERY EXECUTE format('
+        SELECT k.key, k.created, k.updated, v.data
+        FROM public.%I k LEFT OUTER JOIN public.%I v ON v.key = k.key
+        WHERE k.key::text ^@ $1::text AND k.created >= $2 AND k.created <= $3
+          AND EXISTS (SELECT 1 FROM unnest($5::integer[]) p WHERE split_part(k.key, ''/'', p) = $6)
+        ORDER BY k.created DESC, k.key DESC
+        LIMIT $4', keys_table, values_table) USING prefix, time_from, effective_to, result_limit, seg_positions, seg_value;
 END;
 $$;

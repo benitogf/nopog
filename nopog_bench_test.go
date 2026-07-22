@@ -422,59 +422,23 @@ func BenchmarkMediumDatasetRangeQuery(b *testing.B) {
 		}
 	})
 
-	// Benchmark multi-glob queries (regex-based matching)
-	// First, insert some nested data for multi-glob testing
-	b.Run("MultiGlob_Setup_And_Query", func(b *testing.B) {
+	// Benchmark single-glob prefix queries
+	b.Run("SingleGlob_Prefix", func(b *testing.B) {
 		b.StopTimer()
-		// Insert nested structure: stats/userN/clicks/dayM
 		for i := 0; i < 100; i++ {
 			for j := 0; j < 10; j++ {
 				key := fmt.Sprintf("stats/user%d/clicks/day%d", i, j)
 				storage.Set(benchTable, key, `{"count":1}`)
 			}
 		}
-		// Also insert some views data
-		for i := 0; i < 100; i++ {
-			for j := 0; j < 5; j++ {
-				key := fmt.Sprintf("stats/user%d/views/day%d", i, j)
-				storage.Set(benchTable, key, `{"count":1}`)
-			}
-		}
 		b.StartTimer()
 
-		// Multi-glob: stats/*/clicks/* (two wildcards)
-		for i := 0; i < b.N; i++ {
-			results, err := storage.Get(benchTable, "stats/*/clicks/*")
-			if err != nil {
-				b.Fatal(err)
-			}
-			if len(results) != 1000 { // 100 users * 10 days
-				b.Fatalf("expected 1000 results, got %d", len(results))
-			}
-		}
-	})
-
-	b.Run("MultiGlob_MiddleWildcard", func(b *testing.B) {
-		// Multi-glob: stats/*/clicks/day0 (wildcard in middle)
-		for i := 0; i < b.N; i++ {
-			results, err := storage.Get(benchTable, "stats/*/clicks/day0")
-			if err != nil {
-				b.Fatal(err)
-			}
-			if len(results) != 100 { // 100 users
-				b.Fatalf("expected 100 results, got %d", len(results))
-			}
-		}
-	})
-
-	b.Run("SingleGlob_Prefix", func(b *testing.B) {
 		// Single glob at end - uses optimized prefix matching
 		for i := 0; i < b.N; i++ {
 			results, err := storage.Get(benchTable, "stats/*")
 			if err != nil {
 				b.Fatal(err)
 			}
-			// Should get all stats entries (1000 clicks + 500 views = 1500)
 			_ = results
 		}
 	})

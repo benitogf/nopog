@@ -1,7 +1,10 @@
 package nopog
 
 import (
+	"fmt"
+	"os"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -393,11 +396,13 @@ func TestKeysRangeWithGlob(t *testing.T) {
 	require.Equal(t, "range/2", keys[1])
 }
 
+// TestMonotonicTimestamps verifies timestamps are non-decreasing (µs wall clock).
+// Equal values ARE possible for writes within the same microsecond; ordering and
+// cursors tiebreak by key rather than relying on strictly increasing timestamps.
 func TestMonotonicTimestamps(t *testing.T) {
 	storage := newTestStorage(t)
 	defer storage.Close()
 
-	// Create multiple entries rapidly and verify timestamps are strictly increasing
 	var timestamps []int64
 	for i := 0; i < 10; i++ {
 		ts, err := storage.Set(testTable, "mono/"+strconv.Itoa(i), testObject)
@@ -405,12 +410,12 @@ func TestMonotonicTimestamps(t *testing.T) {
 		timestamps = append(timestamps, ts)
 	}
 
-	// Verify all timestamps are strictly increasing
+	// Non-decreasing: never goes backwards, but equal values are allowed.
 	for i := 1; i < len(timestamps); i++ {
-		require.Greater(t, timestamps[i], timestamps[i-1], "timestamp %d should be greater than %d", i, i-1)
+		require.GreaterOrEqual(t, timestamps[i], timestamps[i-1], "timestamp %d should be >= %d", i, i-1)
 	}
 
-	// Verify the stored created timestamps match what was returned
+	// Verify the stored created timestamps match what was returned.
 	for i := 0; i < 10; i++ {
 		dataList, err := storage.Get(testTable, "mono/"+strconv.Itoa(i))
 		require.NoError(t, err)
@@ -629,122 +634,17 @@ func TestGetByJSON(t *testing.T) {
 	require.Equal(t, 0, len(results))
 }
 
-func TestMultiGlob(t *testing.T) {
+// TestMultiGlobRejected verifies multi-glob patterns now error from both Get and Del,
+// since valid() rejects a mid-pattern or second wildcard.
+func TestMultiGlobRejected(t *testing.T) {
 	storage := newTestStorage(t)
 	defer storage.Close()
 
-	// Insert test data with nested structure
-	_, err := storage.Set(testTable, "stats/user1/clicks/day1", `{"count":10}`)
-	require.NoError(t, err)
-	_, err = storage.Set(testTable, "stats/user1/clicks/day2", `{"count":20}`)
-	require.NoError(t, err)
-	_, err = storage.Set(testTable, "stats/user2/clicks/day1", `{"count":15}`)
-	require.NoError(t, err)
-	_, err = storage.Set(testTable, "stats/user1/views/day1", `{"count":100}`)
-	require.NoError(t, err)
-	_, err = storage.Set(testTable, "other/data", `{"value":1}`)
-	require.NoError(t, err)
-
-	// Multi-glob: match all clicks for all users
-	results, err := storage.Get(testTable, "stats/*/clicks/*")
-	require.NoError(t, err)
-	require.Equal(t, 3, len(results))
-
-	// Multi-glob: match all day1 data for user1
-	results, err = storage.Get(testTable, "stats/user1/*/day1")
-	require.NoError(t, err)
-	require.Equal(t, 2, len(results)) // clicks/day1 and views/day1
-
-	// Multi-glob: wildcard in middle only
-	results, err = storage.Get(testTable, "stats/*/clicks/day1")
-	require.NoError(t, err)
-	require.Equal(t, 2, len(results)) // user1 and user2
-
-	// Single glob still works (uses optimized path)
-	results, err = storage.Get(testTable, "stats/*")
-	require.NoError(t, err)
-	require.Equal(t, 4, len(results)) // all stats entries
-
-	// Exact key still works
-	results, err = storage.Get(testTable, "stats/user1/clicks/day1")
-	require.NoError(t, err)
-	require.Equal(t, 1, len(results))
-}
-
-func TestMultiGlobEdgeCases(t *testing.T) {
-	storage := newTestStorage(t)
-	defer storage.Close()
-
-	// Insert test data
-	_, err := storage.Set(testTable, "a/b/c/d", `{"level":4}`)
-	require.NoError(t, err)
-	_, err = storage.Set(testTable, "a/x/c/y", `{"level":4}`)
-	require.NoError(t, err)
-	_, err = storage.Set(testTable, "a/b/c", `{"level":3}`)
-	require.NoError(t, err)
-	_, err = storage.Set(testTable, "a/b", `{"level":2}`)
-	require.NoError(t, err)
-
-	// Multi-glob with single wildcard in middle (not at end)
-	results, err := storage.Get(testTable, "a/*/c")
-	require.NoError(t, err)
-	require.Equal(t, 1, len(results))
-	require.Equal(t, "a/b/c", results[0].Key)
-
-	// Multi-glob matching specific depth
-	results, err = storage.Get(testTable, "a/*/c/*")
-	require.NoError(t, err)
-	require.Equal(t, 2, len(results)) // a/b/c/d and a/x/c/y
-
-	// Multi-glob no matches
-	results, err = storage.Get(testTable, "a/*/z/*")
-	require.NoError(t, err)
-	require.Equal(t, 0, len(results))
-
-	// Multi-glob with three wildcards
-	_, err = storage.Set(testTable, "x/1/y/2/z/3", `{"deep":true}`)
-	require.NoError(t, err)
-	results, err = storage.Get(testTable, "x/*/y/*/z/*")
-	require.NoError(t, err)
-	require.Equal(t, 1, len(results))
-	require.Equal(t, "x/1/y/2/z/3", results[0].Key)
-}
-
-func TestMultiGlobInvalidPatterns(t *testing.T) {
-	storage := newTestStorage(t)
-	defer storage.Close()
-
-	// Double glob should fail
-	_, err := storage.Get(testTable, "a/**/b")
-	require.Error(t, err)
-
-	// Double separator should fail (routed through multi-glob)
-	_, err = storage.Get(testTable, "a//*/b")
-	require.Error(t, err)
-}
-
-func TestIsMultiGlobFunction(t *testing.T) {
-	// Test the isMultiGlob detection function directly
-	tests := []struct {
-		pattern  string
-		expected bool
-	}{
-		{"users/*", false},        // single glob at end
-		{"*", false},              // single glob
-		{"users/1", false},        // no glob
-		{"users/*/posts/*", true}, // multiple globs
-		{"users/*/posts", true},   // glob in middle
-		{"a/*/b/*/c", true},       // multiple globs
-		{"a/*/b", true},           // glob in middle
-		{"", false},               // empty
-		{"no/glob/here", false},   // no glob
-	}
-
-	for _, tt := range tests {
-		result := isMultiGlob(tt.pattern)
-		if result != tt.expected {
-			t.Errorf("isMultiGlob(%q) = %v, want %v", tt.pattern, result, tt.expected)
-		}
+	for _, pattern := range []string{"a/*/*", "a/*/b"} {
+		_, err := storage.Get(testTable, pattern)
+		require.Error(t, err, "Get(%q) should error", pattern)
+		err = storage.Del(testTable, pattern)
+		require.Error(t, err, "Del(%q) should error", pattern)
 	}
 }
 
@@ -1135,4 +1035,201 @@ func TestDropTableActualDrop(t *testing.T) {
 	// Trying to use the dropped table should fail
 	_, err = storage.Get("temp_drop_test", "key/1")
 	require.Error(t, err)
+}
+
+func TestSetWithMeta(t *testing.T) {
+	storage := newTestStorage(t)
+	defer storage.Close()
+
+	// Establish a row with a natural created timestamp.
+	orig, err := storage.Set(testTable, "meta/1", `{"v":1}`)
+	require.NoError(t, err)
+
+	// Overwrite created (and updated) with caller-supplied values.
+	newCreated := orig - 1000000
+	newUpdated := orig + 5000000
+	err = storage.SetWithMeta(testTable, "meta/1", `{"v":2}`, newCreated, newUpdated)
+	require.NoError(t, err)
+
+	res, err := storage.Get(testTable, "meta/1")
+	require.NoError(t, err)
+	require.Equal(t, 1, len(res))
+	require.Equal(t, newCreated, res[0].Created, "created must be overwritten")
+	require.Equal(t, newUpdated, res[0].Updated, "updated must be overwritten")
+	require.JSONEq(t, `{"v":2}`, string(res[0].Value))
+
+	// Wildcards rejected.
+	err = storage.SetWithMeta(testTable, "meta/*", `{}`, 1, 2)
+	require.Error(t, err)
+}
+
+func TestImportBatch(t *testing.T) {
+	storage := newTestStorage(t)
+	defer storage.Close()
+
+	// Pre-existing row that must win over the import.
+	err := storage.SetWithMeta(testTable, "imp/1", `{"orig":true}`, 1000, 2000)
+	require.NoError(t, err)
+
+	entries := []Object{
+		{Key: "imp/1", Created: 9999, Updated: 8888, Value: []byte(`{"imported":true}`)}, // conflict, must not overwrite
+		{Key: "imp/2", Created: 3000, Updated: 0, Value: []byte(`{"n":2}`)},              // new, updated 0 -> NULL
+		{Key: "imp/3", Created: 4000, Updated: 4500, Value: []byte(`{"n":3}`)},           // new
+	}
+	inserted, err := storage.ImportBatch(testTable, entries)
+	require.NoError(t, err)
+	require.Equal(t, 2, inserted, "only genuinely new keys are counted")
+
+	// Existing row unchanged.
+	res, err := storage.Get(testTable, "imp/1")
+	require.NoError(t, err)
+	require.Equal(t, 1, len(res))
+	require.Equal(t, int64(1000), res[0].Created)
+	require.JSONEq(t, `{"orig":true}`, string(res[0].Value))
+
+	// imp/2 stored with NULL updated -> 0.
+	res, err = storage.Get(testTable, "imp/2")
+	require.NoError(t, err)
+	require.Equal(t, 1, len(res))
+	require.Equal(t, int64(3000), res[0].Created)
+	require.Equal(t, int64(0), res[0].Updated)
+}
+
+func TestScanPagination(t *testing.T) {
+	storage := newTestStorage(t)
+	defer storage.Close()
+
+	for i := 0; i < 25; i++ {
+		_, err := storage.Set(testTable, "scan/"+strconv.Itoa(i), fmt.Sprintf(`{"i":%d}`, i))
+		require.NoError(t, err)
+	}
+
+	// Walk Scan to exhaustion.
+	var walked []Object
+	var curCreated int64
+	var curKey string
+	for {
+		batch, err := storage.Scan(testTable, curCreated, curKey, 7)
+		require.NoError(t, err)
+		if len(batch) == 0 {
+			break
+		}
+		walked = append(walked, batch...)
+		last := batch[len(batch)-1]
+		curCreated, curKey = last.Created, last.Key
+	}
+
+	// Ascending (created, key) order.
+	for i := 1; i < len(walked); i++ {
+		prev, cur := walked[i-1], walked[i]
+		if cur.Created == prev.Created {
+			require.Greater(t, cur.Key, prev.Key)
+		} else {
+			require.Greater(t, cur.Created, prev.Created)
+		}
+	}
+
+	// Same set as Get(*).
+	all, err := storage.Get(testTable, "*")
+	require.NoError(t, err)
+	require.Equal(t, len(all), len(walked))
+
+	got := map[string]bool{}
+	for _, o := range walked {
+		got[o.Key] = true
+	}
+	for _, o := range all {
+		require.True(t, got[o.Key], "key %s missing from scan", o.Key)
+	}
+}
+
+// TestScanStableUnderCreatedTies hammers the keyset cursor: many rows share the
+// SAME created value; walking Scan with limit 1 must visit each row exactly once.
+func TestScanStableUnderCreatedTies(t *testing.T) {
+	storage := newTestStorage(t)
+	defer storage.Close()
+
+	const n = 8
+	const sharedCreated int64 = 1700000000000000
+	for i := 0; i < n; i++ {
+		err := storage.SetWithMeta(testTable, "tie/"+strconv.Itoa(i), fmt.Sprintf(`{"i":%d}`, i), sharedCreated, 0)
+		require.NoError(t, err)
+	}
+
+	seen := map[string]int{}
+	var curCreated int64
+	var curKey string
+	steps := 0
+	for {
+		batch, err := storage.Scan(testTable, curCreated, curKey, 1)
+		require.NoError(t, err)
+		if len(batch) == 0 {
+			break
+		}
+		require.Equal(t, 1, len(batch))
+		seen[batch[0].Key]++
+		curCreated, curKey = batch[0].Created, batch[0].Key
+		steps++
+		require.LessOrEqual(t, steps, n+2, "scan did not terminate")
+	}
+
+	require.Equal(t, n, len(seen), "every row visited")
+	for k, c := range seen {
+		require.Equal(t, 1, c, "key %s visited exactly once", k)
+	}
+}
+
+func TestGetRangeSegment(t *testing.T) {
+	storage := newTestStorage(t)
+	defer storage.Close()
+
+	// Target id "t42" sits at segment 3 for some keys, segment 4 for others.
+	_, err := storage.Set(testTable, "a/b/t42/x", `{"n":1}`) // segment 3
+	require.NoError(t, err)
+	_, err = storage.Set(testTable, "a/b/c/t42", `{"n":2}`) // segment 4
+	require.NoError(t, err)
+	_, err = storage.Set(testTable, "a/t42/c/d", `{"n":3}`) // segment 2 (should NOT match {3,4})
+	require.NoError(t, err)
+	_, err = storage.Set(testTable, "a/b/c/d", `{"n":4}`) // no match
+	require.NoError(t, err)
+
+	res, err := storage.GetRangeSegment(testTable, "*", 0, 0, 100, []int{3, 4}, "t42")
+	require.NoError(t, err)
+	keys := map[string]bool{}
+	for _, o := range res {
+		keys[o.Key] = true
+	}
+	require.Equal(t, 2, len(res))
+	require.True(t, keys["a/b/t42/x"])
+	require.True(t, keys["a/b/c/t42"])
+	require.False(t, keys["a/t42/c/d"])
+}
+
+func TestSchemaSQLEmbed(t *testing.T) {
+	require.NotEmpty(t, SchemaSQL, "SchemaSQL must be embedded")
+	onDisk, err := os.ReadFile("nopog.sql")
+	require.NoError(t, err)
+	require.Equal(t, string(onDisk), SchemaSQL, "embedded schema must match nopog.sql on disk")
+}
+
+// TestSchemaOrderedFunctionsTiebreak asserts every ordered read function in the
+// embedded schema carries a key tiebreak on its ORDER BY.
+func TestSchemaOrderedFunctionsTiebreak(t *testing.T) {
+	// No bare "ORDER BY ... created DESC" without a following key tiebreak.
+	for _, line := range strings.Split(SchemaSQL, "\n") {
+		l := strings.TrimSpace(line)
+		if !strings.Contains(l, "ORDER BY") {
+			continue
+		}
+		if strings.Contains(l, "created DESC") {
+			require.True(t, strings.Contains(l, "key DESC"),
+				"ordered-DESC clause missing key tiebreak: %q", l)
+		}
+		if strings.Contains(l, "created ASC") {
+			require.True(t, strings.Contains(l, "key ASC"),
+				"ordered-ASC clause missing key tiebreak: %q", l)
+		}
+	}
+	// sanity: confirm we actually inspected some ordered clauses
+	require.True(t, strings.Contains(SchemaSQL, "ORDER BY k.created DESC, k.key DESC"))
 }
