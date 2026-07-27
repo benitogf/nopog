@@ -1263,6 +1263,53 @@ func TestGetRangeSegmentUnlimited(t *testing.T) {
 	require.Equal(t, 2, len(capped))
 }
 
+// TestLimitZeroMeansUnlimited verifies the whole read API treats limit <= 0 as
+// "no limit" (all matching rows) uniformly — GetN, GetNRange, KeysRange, Scan —
+// matching GetRangeSegment/GetRange, and that a negative limit does not raise.
+func TestLimitZeroMeansUnlimited(t *testing.T) {
+	storage := newTestStorage(t)
+	defer storage.Close()
+
+	const n = 5
+	for i := range n {
+		_, err := storage.Set(testTable, "lim/"+strconv.Itoa(i), testObject)
+		require.NoError(t, err)
+	}
+
+	// limit == 0 → all matching rows.
+	gn, err := storage.GetN(testTable, "lim/*", 0)
+	require.NoError(t, err)
+	require.Equal(t, n, len(gn))
+
+	gnr, err := storage.GetNRange(testTable, "lim/*", 0, 0, 0)
+	require.NoError(t, err)
+	require.Equal(t, n, len(gnr))
+
+	kr, err := storage.KeysRange(testTable, "lim/*", 0, 0, 0)
+	require.NoError(t, err)
+	require.Equal(t, n, len(kr))
+
+	sc, err := storage.Scan(testTable, 0, "", 0)
+	require.NoError(t, err)
+	require.Equal(t, n, len(sc))
+
+	// negative limit is also unlimited, never a Postgres "LIMIT must not be negative" error.
+	gnrNeg, err := storage.GetNRange(testTable, "lim/*", 0, 0, -1)
+	require.NoError(t, err)
+	require.Equal(t, n, len(gnrNeg))
+	krNeg, err := storage.KeysRange(testTable, "lim/*", 0, 0, -1)
+	require.NoError(t, err)
+	require.Equal(t, n, len(krNeg))
+	scNeg, err := storage.Scan(testTable, 0, "", -1)
+	require.NoError(t, err)
+	require.Equal(t, n, len(scNeg))
+
+	// a positive limit still caps.
+	capped, err := storage.GetNRange(testTable, "lim/*", 0, 0, 2)
+	require.NoError(t, err)
+	require.Equal(t, 2, len(capped))
+}
+
 func TestSchemaSQLEmbed(t *testing.T) {
 	require.NotEmpty(t, SchemaSQL, "SchemaSQL must be embedded")
 	onDisk, err := os.ReadFile("nopog.sql")

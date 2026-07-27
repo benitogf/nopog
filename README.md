@@ -100,6 +100,8 @@ Del(table, path string) error
 TableStats(table string) (*TableStatistics, error)  // Row count and size for partitioning decisions
 ```
 
+**Limit convention:** every read that takes a `limit` (`GetN`, `GetNRange`, `KeysRange`, `Scan`, `GetRangeSegment`) treats a `limit <= 0` as "no limit" — all matching rows. `GetRange` has no `limit` parameter and always returns everything in range.
+
 ### SetWithMeta
 
 ```go
@@ -122,7 +124,7 @@ Additive bulk insert. Existing keys are never overwritten (`ON CONFLICT DO NOTHI
 Scan(table string, cursorCreated int64, cursorKey string, limit int) ([]Object, error)
 ```
 
-Keyset pagination over `(created, key)` in ascending order. Pass the previous page's last row `created` and `key` as `cursorCreated`/`cursorKey` to fetch the next page; pass the zero cursor for the first page. Because ordering tiebreaks by `key`, pagination is stable even when timestamps collide.
+Keyset pagination over `(created, key)` in ascending order. Pass the previous page's last row `created` and `key` as `cursorCreated`/`cursorKey` to fetch the next page; pass the zero cursor for the first page. A `limit <= 0` means no limit (all rows after the cursor). Because ordering tiebreaks by `key`, pagination is stable even when timestamps collide.
 
 ### GetRangeSegment
 

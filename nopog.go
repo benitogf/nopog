@@ -250,7 +250,7 @@ func (db *Storage) Keys(table string) ([]string, error) {
 	return keys, nil
 }
 
-// KeysRange list keys in a path and time range
+// KeysRange list keys in a path and time range. "to = 0" is now; a limit <= 0 means no limit.
 func (db *Storage) KeysRange(table, path string, from, to int64, limit int) ([]string, error) {
 	keys := []string{}
 	rows, err := db.Client.Query(peekRangeQuery()+";", table, path, from, to, limit)
@@ -316,10 +316,17 @@ func (db *Storage) Get(table, path string) ([]Object, error) {
 	return res, nil
 }
 
-// GetN get last N elements of a pattern related value(s) from a table
+// GetN get last N elements of a pattern related value(s) from a table.
+// A limit <= 0 means no limit (all matching elements), consistent with the range API.
 func (db *Storage) GetN(table, path string, limit int) ([]Object, error) {
 	res := []Object{}
-	rows, err := db.Client.Query(getQuery()+" limit $3;", table, path, strconv.FormatInt(int64(limit), 10))
+	var rows *sql.Rows
+	var err error
+	if limit > 0 {
+		rows, err = db.Client.Query(getQuery()+" limit $3;", table, path, strconv.FormatInt(int64(limit), 10))
+	} else {
+		rows, err = db.Client.Query(getQuery()+";", table, path)
+	}
 	if err != nil {
 		db.Console.Err("GetN: failed get on sql", err)
 		return res, err
@@ -352,7 +359,7 @@ func (db *Storage) GetN(table, path string, limit int) ([]Object, error) {
 }
 
 // GetNRange get last N elements of a pattern related value(s) created in a time range. "to = 0" is treated as now.
-// Time bounds are microseconds since epoch; ordering tiebreaks by key.
+// Time bounds are microseconds since epoch; ordering tiebreaks by key. A limit <= 0 means no limit.
 func (db *Storage) GetNRange(table, path string, from, to int64, limit int) ([]Object, error) {
 	res := []Object{}
 	rows, err := db.Client.Query(getRangeQuery()+";", table, path, from, to, limit)
@@ -389,10 +396,10 @@ func (db *Storage) GetNRange(table, path string, from, to int64, limit int) ([]O
 
 // GetRange get elements of a pattern related value(s) created in a time range. "to = 0" is treated as now.
 // Time bounds are microseconds since epoch; ordering tiebreaks by key.
-// Uses a high limit (1 billion) to effectively get all results
+// Passes limit 0 (no limit) to return all matching results in the range.
 func (db *Storage) GetRange(table, path string, from, to int64) ([]Object, error) {
 	res := []Object{}
-	rows, err := db.Client.Query(getRangeQuery()+";", table, path, from, to, 1000000000)
+	rows, err := db.Client.Query(getRangeQuery()+";", table, path, from, to, 0)
 	if err != nil {
 		db.Console.Err("GetRange: failed get on sql", err)
 		return res, err
@@ -532,6 +539,7 @@ func (db *Storage) ImportBatch(table string, entries []Object) (inserted int, er
 
 // Scan walks the table by keyset pagination ordered ascending by (created, key),
 // returning up to limit rows strictly after the (cursorCreated, cursorKey) cursor.
+// A limit <= 0 means no limit (all rows after the cursor).
 // The cursor is stable under equal created values because it tiebreaks by key.
 func (db *Storage) Scan(table string, cursorCreated int64, cursorKey string, limit int) ([]Object, error) {
 	res := []Object{}

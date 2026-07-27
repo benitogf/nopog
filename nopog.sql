@@ -184,6 +184,7 @@ DECLARE
     noWildcard bool := wildcardPosition = 0;
     prefix character varying;
     effective_to bigint;
+    effective_limit bigint;
 BEGIN
     IF NOT public.valid(fkey) THEN
         RAISE EXCEPTION 'invalid key';
@@ -194,6 +195,14 @@ BEGIN
     ELSE
         effective_to := time_to;
     END IF;
+    -- result_limit <= 0 means "no limit" (LIMIT NULL returns all rows);
+    -- LIMIT 0 would return an empty set and a negative LIMIT would raise.
+    IF result_limit <= 0 THEN
+        effective_limit := NULL;
+    ELSE
+        effective_limit := result_limit;
+    END IF;
+
 
     IF fkey = '*' THEN
         RETURN QUERY EXECUTE format('
@@ -201,7 +210,7 @@ BEGIN
             FROM public.%I k LEFT OUTER JOIN public.%I v ON v.key = k.key
             WHERE k.created >= $1 AND k.created <= $2
             ORDER BY k.created DESC, k.key DESC
-            LIMIT $3', keys_table, values_table) USING time_from, effective_to, result_limit;
+            LIMIT $3', keys_table, values_table) USING time_from, effective_to, effective_limit;
         RETURN;
     END IF;
 
@@ -210,7 +219,7 @@ BEGIN
             SELECT k.key, k.created, k.updated, v.data
             FROM public.%I k LEFT OUTER JOIN public.%I v ON v.key = k.key
             WHERE k.key = $1 AND k.created >= $2 AND k.created <= $3
-            LIMIT $4', keys_table, values_table) USING fkey, time_from, effective_to, result_limit;
+            LIMIT $4', keys_table, values_table) USING fkey, time_from, effective_to, effective_limit;
         RETURN;
     END IF;
 
@@ -220,7 +229,7 @@ BEGIN
         FROM public.%I k LEFT OUTER JOIN public.%I v ON v.key = k.key
         WHERE k.key::text ^@ $1::text AND k.created >= $2 AND k.created <= $3
         ORDER BY k.created DESC, k.key DESC
-        LIMIT $4', keys_table, values_table) USING prefix, time_from, effective_to, result_limit;
+        LIMIT $4', keys_table, values_table) USING prefix, time_from, effective_to, effective_limit;
 END;
 $$;
 
@@ -235,6 +244,7 @@ DECLARE
     noWildcard bool := wildcardPosition = 0;
     prefix character varying;
     effective_to bigint;
+    effective_limit bigint;
 BEGIN
     IF NOT public.valid(fkey) THEN
         RAISE EXCEPTION 'invalid key';
@@ -245,13 +255,21 @@ BEGIN
     ELSE
         effective_to := time_to;
     END IF;
+    -- result_limit <= 0 means "no limit" (LIMIT NULL returns all rows);
+    -- LIMIT 0 would return an empty set and a negative LIMIT would raise.
+    IF result_limit <= 0 THEN
+        effective_limit := NULL;
+    ELSE
+        effective_limit := result_limit;
+    END IF;
+
 
     IF fkey = '*' THEN
         RETURN QUERY EXECUTE format('
             SELECT key, created, updated FROM public.%I
             WHERE created >= $1 AND created <= $2
             ORDER BY created DESC, key DESC
-            LIMIT $3', keys_table) USING time_from, effective_to, result_limit;
+            LIMIT $3', keys_table) USING time_from, effective_to, effective_limit;
         RETURN;
     END IF;
 
@@ -259,7 +277,7 @@ BEGIN
         RETURN QUERY EXECUTE format('
             SELECT key, created, updated FROM public.%I
             WHERE key = $1 AND created >= $2 AND created <= $3
-            LIMIT $4', keys_table) USING fkey, time_from, effective_to, result_limit;
+            LIMIT $4', keys_table) USING fkey, time_from, effective_to, effective_limit;
         RETURN;
     END IF;
 
@@ -268,7 +286,7 @@ BEGIN
         SELECT key, created, updated FROM public.%I
         WHERE key::text ^@ $1::text AND created >= $2 AND created <= $3
         ORDER BY created DESC, key DESC
-        LIMIT $4', keys_table) USING prefix, time_from, effective_to, result_limit;
+        LIMIT $4', keys_table) USING prefix, time_from, effective_to, effective_limit;
 END;
 $$;
 
@@ -550,13 +568,22 @@ CREATE FUNCTION public.nopog_scan(tname character varying, cursor_created bigint
 DECLARE
     keys_table text := 'keys_' || tname;
     values_table text := 'values_' || tname;
+    effective_limit bigint;
 BEGIN
+    -- result_limit <= 0 means "no limit" (LIMIT NULL returns all rows);
+    -- LIMIT 0 would return an empty set and a negative LIMIT would raise.
+    IF result_limit <= 0 THEN
+        effective_limit := NULL;
+    ELSE
+        effective_limit := result_limit;
+    END IF;
+
     RETURN QUERY EXECUTE format('
         SELECT k.key, k.created, k.updated, v.data
         FROM public.%I k LEFT OUTER JOIN public.%I v ON v.key = k.key
         WHERE (k.created, k.key) > ($1, $2)
         ORDER BY k.created ASC, k.key ASC
-        LIMIT $3', keys_table, values_table) USING cursor_created, cursor_key, result_limit;
+        LIMIT $3', keys_table, values_table) USING cursor_created, cursor_key, effective_limit;
 END;
 $$;
 
