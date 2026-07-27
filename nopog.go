@@ -565,7 +565,8 @@ func (db *Storage) Scan(table string, cursorCreated int64, cursorKey string, lim
 }
 
 // GetRangeSegment returns entries in a time range whose key has any of the given
-// path-segment positions (1-based, '/'-delimited) equal to value. "to = 0" is now.
+// path-segment positions (1-based, '/'-delimited) equal to value. "to = 0" is now,
+// and "limit <= 0" means no limit (all matching rows in range).
 func (db *Storage) GetRangeSegment(table, path string, from, to int64, limit int, positions []int, value string) ([]Object, error) {
 	res := []Object{}
 	rows, err := db.Client.Query("select * from public.nopog_get_range_segment($1, $2, $3, $4, $5, $6, $7);",

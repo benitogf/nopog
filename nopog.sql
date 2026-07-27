@@ -573,6 +573,7 @@ DECLARE
     noWildcard bool := wildcardPosition = 0;
     prefix character varying;
     effective_to bigint;
+    effective_limit bigint;
 BEGIN
     IF NOT public.valid(fkey) THEN
         RAISE EXCEPTION 'invalid key';
@@ -584,6 +585,15 @@ BEGIN
         effective_to := time_to;
     END IF;
 
+    -- result_limit <= 0 means "no limit" (LIMIT NULL returns all rows),
+    -- mirroring the time_to = 0 -> now convention above; LIMIT 0 would return
+    -- an empty set, which would give callers no way to request all rows in range.
+    IF result_limit <= 0 THEN
+        effective_limit := NULL;
+    ELSE
+        effective_limit := result_limit;
+    END IF;
+
     IF fkey = '*' THEN
         RETURN QUERY EXECUTE format('
             SELECT k.key, k.created, k.updated, v.data
@@ -591,7 +601,7 @@ BEGIN
             WHERE k.created >= $1 AND k.created <= $2
               AND EXISTS (SELECT 1 FROM unnest($4::integer[]) p WHERE split_part(k.key, ''/'', p) = $5)
             ORDER BY k.created DESC, k.key DESC
-            LIMIT $3', keys_table, values_table) USING time_from, effective_to, result_limit, seg_positions, seg_value;
+            LIMIT $3', keys_table, values_table) USING time_from, effective_to, effective_limit, seg_positions, seg_value;
         RETURN;
     END IF;
 
@@ -602,7 +612,7 @@ BEGIN
             WHERE k.key = $1 AND k.created >= $2 AND k.created <= $3
               AND EXISTS (SELECT 1 FROM unnest($5::integer[]) p WHERE split_part(k.key, ''/'', p) = $6)
             ORDER BY k.created DESC, k.key DESC
-            LIMIT $4', keys_table, values_table) USING fkey, time_from, effective_to, result_limit, seg_positions, seg_value;
+            LIMIT $4', keys_table, values_table) USING fkey, time_from, effective_to, effective_limit, seg_positions, seg_value;
         RETURN;
     END IF;
 
@@ -613,6 +623,6 @@ BEGIN
         WHERE k.key::text ^@ $1::text AND k.created >= $2 AND k.created <= $3
           AND EXISTS (SELECT 1 FROM unnest($5::integer[]) p WHERE split_part(k.key, ''/'', p) = $6)
         ORDER BY k.created DESC, k.key DESC
-        LIMIT $4', keys_table, values_table) USING prefix, time_from, effective_to, result_limit, seg_positions, seg_value;
+        LIMIT $4', keys_table, values_table) USING prefix, time_from, effective_to, effective_limit, seg_positions, seg_value;
 END;
 $$;

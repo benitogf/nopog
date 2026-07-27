@@ -130,7 +130,7 @@ Keyset pagination over `(created, key)` in ascending order. Pass the previous pa
 GetRangeSegment(table, path string, from, to int64, limit int, positions []int, value string) ([]Object, error)
 ```
 
-Range query with a path-segment equality filter. Matches keys within the inclusive `[from, to]` time window (`created >= from AND created <= to`) whose path segment at **any** position listed in `positions` equals `value`. A `to` of `0` is treated as "now" (consistent with `GetNRange`/`GetRange`). For example, `positions` `{3, 4}` with `value` `"42"` matches keys where an id may sit at segment 3 or at segment 4 across two key layouts.
+Range query with a path-segment equality filter. Matches keys within the inclusive `[from, to]` time window (`created >= from AND created <= to`) whose path segment at **any** position listed in `positions` equals `value`. A `to` of `0` is treated as "now" (consistent with `GetNRange`/`GetRange`), and a `limit` of `0` (or negative) means "no limit" — all matching rows in range. For example, `positions` `{3, 4}` with `value` `"42"` matches keys where an id may sit at segment 3 or at segment 4 across two key layouts.
 
 ## Schema export
 

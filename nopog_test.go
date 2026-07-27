@@ -1234,6 +1234,35 @@ func TestGetRangeSegment(t *testing.T) {
 	require.False(t, keys["a/t42/c/d"])
 }
 
+// TestGetRangeSegmentUnlimited verifies that limit <= 0 means "no limit" (all
+// matching rows in range), not LIMIT 0 (empty) — mirroring the to=0 -> now
+// convention. A positive limit still caps the result.
+func TestGetRangeSegmentUnlimited(t *testing.T) {
+	storage := newTestStorage(t)
+	defer storage.Close()
+
+	// Five keys all carrying the target id "t42" at segment 3.
+	for i := range 5 {
+		_, err := storage.Set(testTable, "a/b/t42/"+strconv.Itoa(i), `{"n":1}`)
+		require.NoError(t, err)
+	}
+
+	// limit = 0 must return ALL matching rows, not an empty set.
+	all, err := storage.GetRangeSegment(testTable, "*", 0, 0, 0, []int{3}, "t42")
+	require.NoError(t, err)
+	require.Equal(t, 5, len(all))
+
+	// A negative limit is also treated as unlimited.
+	allNeg, err := storage.GetRangeSegment(testTable, "*", 0, 0, -1, []int{3}, "t42")
+	require.NoError(t, err)
+	require.Equal(t, 5, len(allNeg))
+
+	// A positive limit still caps.
+	capped, err := storage.GetRangeSegment(testTable, "*", 0, 0, 2, []int{3}, "t42")
+	require.NoError(t, err)
+	require.Equal(t, 2, len(capped))
+}
+
 func TestSchemaSQLEmbed(t *testing.T) {
 	require.NotEmpty(t, SchemaSQL, "SchemaSQL must be embedded")
 	onDisk, err := os.ReadFile("nopog.sql")
