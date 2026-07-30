@@ -24,7 +24,7 @@ SET row_security = off;
 --
 
 CREATE TYPE public.entry AS (
-        key character varying(800) COLLATE pg_catalog."C.UTF-8",
+        key character varying(800) COLLATE pg_catalog."C",
         created timestamp without time zone,
         updated timestamp without time zone,
         data json
